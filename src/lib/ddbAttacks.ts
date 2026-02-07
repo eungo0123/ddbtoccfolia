@@ -414,6 +414,7 @@ function ensureUnarmedStrike(attacks: NormalizedAttack[], meta?: AttackListMeta)
     attackBonus: pb + atkMod,
     damage: dmgExpr,
     damageType: "타격",
+	notes: "", // 👈 이 줄을 추가해주세요! (빈 문자열)
   };
 
   out.push(synthetic);
