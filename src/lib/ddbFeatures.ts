@@ -4,71 +4,127 @@
  * D&D Beyond 캐릭터 raw에서 "피쳐(배경/클래스/피트 등)" 이름 목록만 뽑아낸다.
  */
 
+// ✅ [추가] 출력하고 싶지 않은 시스템용/내부용 피트 이름들
+const IGNORED_NAMES = new Set([
+  "Ability Score Improvement", // 능력치 상승은 굳이 텍스트로 안 봐도 됨
+  "Dark Bargain",
+  "Hero's Journey Boon",
+  "Tortle Protector", // 종족 특성 중 중복되는 것들
+  "Primal Knowledge",
+  "Optional Class Features",
+]);
+
 function pickName(x: any): string {
   const n = x?.definition?.name ?? x?.name ?? x?.label ?? "";
-  return String(n ?? "").trim();
+  const s = String(n ?? "").trim();
+  
+  // 차단 목록에 있거나, 이름이 너무 짧으면 무시
+  if (IGNORED_NAMES.has(s)) return "";
+  if (s.length < 2) return "";
+  
+  return s;
 }
 
 function uniq(list: string[]): string[] {
-  return Array.from(new Set(list.map((s) => s.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  return Array.from(new Set(list.map((s) => s.trim()).filter(Boolean)));
 }
 
-// 잡음 제거용 목록
-const MANEUVER_BAN_LIST = new Set([
-  "Combat Superiority",
-  "Maneuvers",
-  "Superiority Dice",
-  "Combat Superiority (Fighter)",
-  "Student of War",
-  "Know Your Enemy"
-]);
+function normalizeManeuverName(name: string): string {
+  let n = name.trim();
 
-/**
- * ✅ 전술기동(Maneuvers) 추출 핵심 로직
- * - 재귀 탐색 대신 ddb.options.class를 직접 뒤집니다.
- * - 배틀마스터 전술기동은 설명(description)에 'superiority die'라는 문구가 무조건 들어갑니다.
- */
-function extractManeuversFromOptions(ddb: any): string[] {
-  const out: string[] = [];
-  
-  // DDB에서 클래스/종족/피트 선택지(옵션)는 이곳에 모여 있습니다.
-  const classOptions = ddb?.options?.class; // 배틀마스터 기동은 여기 있음
-  // const raceOptions = ddb?.options?.race;
-  // const featOptions = ddb?.options?.feat;
+  // "Maneuvers: Precision Attack" → "Precision Attack"
+  n = n.replace(/^Maneuvers:\s*/i, "").trim();
 
-  if (!Array.isArray(classOptions)) return [];
+  // 흔히 섞이는 상위 피쳐/잡음 제거
+  const ban = new Set([
+    "Combat Superiority",
+    "Maneuvers",
+    "Superiority Dice",
+    "Combat Superiority (Fighter)",
+  ]);
+  if (ban.has(n)) return "";
 
-  for (const opt of classOptions) {
-    const def = opt.definition;
-    if (!def) continue;
+  if (n.length < 3) return "";
+  return n;
+}
 
-    const name = String(def.name ?? "").trim();
-    if (!name) continue;
+function deepCollectManeuverNames(root: any): string[] {
+  const out = new Set<string>();
+  const seen = new Set<any>();
 
-    // 1) 이미 상위 피쳐로 분류된 것들 제외
-    if (MANEUVER_BAN_LIST.has(name)) continue;
+  const isNoise = (name: string) => {
+    const ban = new Set([
+      "Combat Superiority",
+      "Maneuvers",
+      "Superiority Dice",
+      "Combat Superiority (Fighter)",
+    ]);
+    return ban.has(name);
+  };
 
-    // 2) 텍스트 분석
-    // 전술기동은 보통 snippet이나 description에 "superiority die" (전투 우월 주사위) 언급이 있음
-    const desc = String(def.description ?? "").toLowerCase();
-    const snippet = String(def.snippet ?? "").toLowerCase();
-    
-    // "Maneuvers:" 접두어가 붙어있는 경우 (가장 확실)
-    if (name.toLowerCase().startsWith("maneuvers:")) {
-      out.push(name.replace(/^Maneuvers:\s*/i, ""));
-      continue;
+  const normalize = (name: string) => {
+    let n = String(name ?? "").trim();
+    n = n.replace(/^Maneuvers:\s*/i, "").trim(); // "Maneuvers: X" → "X"
+    if (!n) return "";
+    if (isNoise(n)) return "";
+    if (n.length < 3) return "";
+    return n;
+  };
+
+  const walk = (node: any, parentKey: string, inManeuverCtx: boolean) => {
+    if (!node || typeof node !== "object") return;
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    const pk = (parentKey || "").toLowerCase();
+
+    const nodeName = pickName(node); 
+    const nameLower = nodeName.toLowerCase();
+
+    const def = node?.definition ?? node;
+    const hay = [
+      def?.featureType,
+      def?.type,
+      def?.subType,
+      def?.category,
+      def?.entityType,
+      def?.friendlySubtypeName,
+      def?.snippet,
+      def?.description,
+    ]
+      .filter(Boolean)
+      .map((v: any) => String(v).toLowerCase())
+      .join(" | ");
+
+    const nextCtx =
+      inManeuverCtx ||
+      pk.includes("maneuver") ||
+      nameLower === "maneuvers" ||
+      nameLower.startsWith("maneuvers:") ||
+      hay.includes("maneuver");
+
+    if (nodeName) {
+      if (nameLower.startsWith("maneuvers:")) {
+        const n = normalize(nodeName);
+        if (n) out.add(n);
+      } else if (nextCtx) {
+        const n = normalize(nodeName);
+        if (n) out.add(n);
+      }
     }
 
-    // 설명에 'superiority die'가 있으면 전술기동일 확률 99%
-    if (desc.includes("superiority die") || snippet.includes("superiority die")) {
-      out.push(name);
-      continue;
+    if (Array.isArray(node)) {
+      for (const v of node) walk(v, parentKey, nextCtx);
+      return;
     }
-    
-    // 혹시 모르니 displayOrder 등 다른 단서가 있을 수 있지만, 위 조건으로 대부분 커버됨
-  }
 
-  return out;
+    for (const [k, v] of Object.entries(node)) {
+      walk(v, k, nextCtx);
+    }
+  };
+
+  walk(root, "", false);
+  return Array.from(out).sort((a, b) => a.localeCompare(b));
 }
 
 
@@ -83,11 +139,11 @@ export type FeatureLists = {
 export function extractFeatureLists(ddb: any): FeatureLists {
   const out: FeatureLists = { classes: [], feats: [], classFeatures: [], maneuvers: [] };
 
-  // 1. Background
+  // Background
   const bg = pickName(ddb?.background);
   if (bg) out.background = bg;
 
-  // 2. Classes & Class Features
+  // Classes
   const classes = Array.isArray(ddb?.classes) ? ddb.classes : [];
   for (const c of classes) {
     const cn =
@@ -103,59 +159,50 @@ export function extractFeatureLists(ddb: any): FeatureLists {
     // Class features
     const cfPools = [
       c?.classFeatures,
-      // c?.features, // 중복 데이터가 많아서 classFeatures 우선
+      // c?.features, // 중복 유발하여 제거
       c?.definition?.classFeatures,
     ];
-    
     for (const p of cfPools) {
       if (Array.isArray(p)) {
         for (const f of p) {
           const fn = pickName(f);
-          // "Maneuvers" 같은 헤더성 피쳐는 목록에는 넣되, 전술기동 목록과는 별개로 취급
-          if (fn && !MANEUVER_BAN_LIST.has(fn)) {
-             out.classFeatures.push(fn);
-          }
+          if (fn) out.classFeatures.push(fn);
         }
       }
     }
   }
 
-  // 3. Feats
-  const featsPools = [ddb?.feats, ddb?.featChoices, ddb?.options?.feats, ddb?.characterFeats];
-  for (const p of featsPools) {
-    if (!p) continue;
-    if (Array.isArray(p)) {
-      for (const f of p) {
-        const fn = pickName(f);
-        if (fn) out.feats.push(fn);
-      }
-    } else if (typeof p === "object") {
-      for (const v of Object.values(p)) {
-        if (Array.isArray(v)) {
-          for (const f of v as any[]) {
-            const fn = pickName(f);
-            if (fn) out.feats.push(fn);
-          }
-        }
-      }
+  // ✅ [수정] Feats: 불필요한 곳(featChoices, options)을 뒤지지 않고 '진짜 피트'만 봅니다.
+  // ddb.feats가 가장 정확하며, Variant Human 보너스 피트도 여기에 들어있습니다.
+  const featsRaw = ddb?.feats;
+  if (Array.isArray(featsRaw)) {
+    for (const f of featsRaw) {
+      const fn = pickName(f);
+      if (fn) out.feats.push(fn);
     }
   }
 
-  // 4. Maneuvers (전술기동)
-  // 기존의 복잡한 재귀 대신, options 배열을 뒤져서 찾아냄
-  out.maneuvers = uniq(extractManeuversFromOptions(ddb));
+  // Maneuvers
+  out.maneuvers = Array.from(
+    new Set(
+      deepCollectManeuverNames(ddb)
+        .map(normalizeManeuverName)
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
 
-  // 중복 제거 및 정렬
+
   out.classes = uniq(out.classes);
   out.feats = uniq(out.feats);
   
-  // classFeatures에서 maneuvers에 이미 들어간 이름이 있다면 제거 (깔끔하게 보이기 위함)
-  out.classFeatures = uniq(out.classFeatures).filter(f => !out.maneuvers.includes(f));
+  // 중복 제거: 만약 피트 이름이 클래스 피쳐에도 있다면(드물지만), 피트 쪽을 우선시하고 싶다면 여기서 필터링 가능
+  // 지금은 그냥 둡니다.
+  out.classFeatures = uniq(out.classFeatures);
 
   return out;
 }
 
-export function buildFeatureListKo(lists: FeatureLists): string {
+export function buildFeatureListKo(lists: any): string {
   const lines: string[] = [];
 
   const pushSection = (title: string, items?: string[] | string) => {
@@ -180,11 +227,8 @@ export function buildFeatureListKo(lists: FeatureLists): string {
 
   pushSection("배경", lists.background);
   pushSection("클래스", lists.classes);
-  pushSection("피트", lists.feats);
-  
-  // 전술기동을 클래스 피쳐보다 먼저 보여주거나 따로 강조
-  pushSection("전투 기교 (Maneuvers)", lists.maneuvers);
-  
+  pushSection("피트", lists.feats); // 이제 깔끔하게 나올 겁니다
+  pushSection("전투 기교", lists.maneuvers);
   pushSection("클래스 피쳐", lists.classFeatures);
 
   return lines.join("\n").trim();
