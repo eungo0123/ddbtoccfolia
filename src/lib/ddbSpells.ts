@@ -96,7 +96,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
           });
           
           // "Fireball: 8d6 fire" 형태로 저장
-          damageInfoList.push(`${name}: ${parts.join(" + ")}`);
+          damageInfoList.push(`${name}:${parts.join(" + ")}`);
         }
       }
     }

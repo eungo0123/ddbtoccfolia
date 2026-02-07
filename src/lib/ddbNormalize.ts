@@ -31,16 +31,7 @@ export type ClassInfo = {
   level: number;
 };
 
-// ✅ [수정] notes 속성 추가!
-export type NormalizedAttack = {
-  name: string;
-  range: string;
-  attackBonus: number;
-  damage: string;
-  damageType: string;
-  isMagic: boolean;
-  notes: string; // 이 부분이 빠져서 에러가 났었습니다.
-};
+// ⚠️ NormalizedAttack 타입 삭제함 (ddbAttacks.ts에서 자체 관리)
 
 export type NormalizedBasic = {
   name: string;
