@@ -393,15 +393,23 @@ export function normalizeBasic(ddb: any): NormalizedBasic {
 
   const saveMods: Record<AbilityKey, number> = { ...abilityMods };
 
-  const skillMods: Record<string, number> = {};
+const skillMods: Record<string, number> = {};
   for (const [skill, ab] of Object.entries(SKILL_ABILITY)) {
     skillMods[skill] = abilityMods[ab];
   }
+
+  // ✅ [추가] 아이템으로 인한 주문 보너스(예: +1 지팡이) 가져오기
+  // 이 함수는 파일 안에 이미 정의되어 있으니 호출만 하면 됩니다.
+  const { spellAttackBonusBonus, spellSaveDcBonus } = getSpellBonusesFromModifiers(ddb);
 
   return {
     name,
     level,
     proficiencyBonus,
+    // ✅ [추가] 아래 두 줄을 꼭 넣어주세요!
+    spellAttackBonusBonus,
+    spellSaveDcBonus,
+
     hpMax,
     hpCurrent,
     ac,
