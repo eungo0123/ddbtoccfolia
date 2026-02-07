@@ -31,6 +31,16 @@ export type ClassInfo = {
   level: number;
 };
 
+// ✅ [복구] ddbAttacks.ts에서 사용하는 공격 타입 정의
+export type NormalizedAttack = {
+  name: string;
+  range: string;
+  attackBonus: number;
+  damage: string;
+  damageType: string;
+  isMagic: boolean;
+};
+
 export type NormalizedBasic = {
   name: string;
   classesStr: string; 
@@ -214,7 +224,6 @@ function getSpeedFt(ddb: any) {
   return s1 || s2 || s3 || s4 || 30;
 }
 
-// ✅ [추가] 잭 오브 올 트레이드(Bard) 확인
 function hasJackOfAllTrades(ddb: any): boolean {
   const classes = Array.isArray(ddb?.classes) ? ddb.classes : [];
   for (const c of classes) {
@@ -223,25 +232,20 @@ function hasJackOfAllTrades(ddb: any): boolean {
   return false;
 }
 
-// ✅ [추가] 스킬 수정치 계산 (숙련, 전문화, 잭오브올트레이드 포함)
 function getFinalSkillMod(ddb: any, skillKey: string, abilityMod: number, pb: number): number {
   const mods = getAllModifiers(ddb);
   const isJack = hasJackOfAllTrades(ddb);
-  
-  let multiplier = 0; // 0=none, 0.5=jack, 1=prof, 2=expert
+  let multiplier = 0; 
   let bonus = 0;
 
   for (const m of mods) {
-    // subType이 "stealth", "acrobatics" 등으로 들어옴
     const sub = (m?.subType ?? "").toLowerCase().replace(/\s+/g, "");
     if (sub !== skillKey) continue;
-
     if (m.type === "proficiency") multiplier = Math.max(multiplier, 1);
     else if (m.type === "expertise") multiplier = Math.max(multiplier, 2);
     else if (m.type === "bonus") bonus += Number(m.value || 0);
   }
 
-  // 잭 오브 올 트레이드: 숙련(1)도 전문화(2)도 아니면 0.5 적용
   if (multiplier === 0 && isJack) {
     multiplier = 0.5;
   }
@@ -249,16 +253,12 @@ function getFinalSkillMod(ddb: any, skillKey: string, abilityMod: number, pb: nu
   return abilityMod + Math.floor(pb * multiplier) + bonus;
 }
 
-// ✅ [추가] 내성 굴림 수정치 계산
 function getFinalSaveMod(ddb: any, abilityKey: string, abilityMod: number, pb: number): number {
   const mods = getAllModifiers(ddb);
   let isProficient = false;
   let bonus = 0;
-
-  // 내성 굴림은 subType이 "wisdom-saving-throws" 또는 "wisdom" 등으로 올 수 있음
   const target1 = `${abilityKey}-saving-throws`;
   const target2 = abilityKey;
-
   for (const m of mods) {
     const sub = (m?.subType ?? "").toLowerCase();
     if (sub === target1 || sub === target2) {
@@ -266,7 +266,6 @@ function getFinalSaveMod(ddb: any, abilityKey: string, abilityMod: number, pb: n
       if (m.type === "bonus") bonus += Number(m.value || 0);
     }
   }
-
   return abilityMod + (isProficient ? pb : 0) + bonus;
 }
 
@@ -292,18 +291,15 @@ export function normalizeBasic(ddb: any): NormalizedBasic {
   const { max: hpMax, cur: hpCurrent } = getHp(ddb, level, abilityMods.con);
   const ac = getAc(ddb, abilityMods.dex);
   const speedFt = getSpeedFt(ddb);
-  const initiative = abilityMods.dex; // 참고: Alert 피트 같은 건 여기서 추가 계산 필요할 수도 있음
+  const initiative = abilityMods.dex;
 
-  // ✅ [수정] 내성 굴림 정확히 계산
   const saveMods: Record<AbilityKey, number> = {} as any;
   for (const key of ABILITIES) {
     saveMods[key] = getFinalSaveMod(ddb, key, abilityMods[key], proficiencyBonus);
   }
 
-  // ✅ [수정] 스킬 수정치 정확히 계산
   const skillMods: Record<string, number> = {};
   for (const [skill, ab] of Object.entries(SKILL_ABILITY)) {
-    // 스킬 키(athletics 등)와 능력치 수정치(str 등)를 넘겨서 계산
     skillMods[skill] = getFinalSkillMod(ddb, skill, abilityMods[ab], proficiencyBonus);
   }
 
@@ -324,7 +320,7 @@ export function normalizeBasic(ddb: any): NormalizedBasic {
     initiative,
     abilityScores,
     abilityMods,
-    saveMods, // ✅ 수정됨
-    skillMods, // ✅ 수정됨
+    saveMods,
+    skillMods,
   };
 }
