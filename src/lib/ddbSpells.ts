@@ -1,5 +1,5 @@
 // src/lib/ddbSpells.ts
-import type { NormalizedBasic, AbilityKey } from "@/lib/ddbNormalize";
+import type { NormalizedBasic, AbilityKey } from "./ddbNormalize";
 
 export type NormalizedSpellAction =
   | {
