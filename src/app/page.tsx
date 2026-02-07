@@ -5,6 +5,7 @@ import React, { useMemo, useState } from "react";
 import { normalizeBasic } from "../lib/ddbNormalize";
 import { extractAttacks, buildAttackListKo } from "../lib/ddbAttacks";
 import { extractFeatureLists, buildFeatureListKo } from "../lib/ddbFeatures";
+import { buildItemListKo } from "../lib/ddbItems";
 import { buildCcfoliaCharacterJson, stringifyCcfoliaJson } from "../lib/ccfolia";
 
 type AbilityKey = "str" | "dex" | "con" | "int" | "wis" | "cha";
@@ -66,6 +67,7 @@ export default function Home() {
   const [attackText, setAttackText] = useState("");
   const [spellText, setSpellText] = useState("");
   const [featureText, setFeatureText] = useState("");
+  const [itemText, setItemText] = useState("");
   const [ccfoliaJson, setCcfoliaJson] = useState("");
 
   const canConvert = useMemo(() => !!ddbCharRaw, [ddbCharRaw]);
@@ -140,6 +142,9 @@ export default function Home() {
 	  // 피쳐/피트 목록
       const features = extractFeatureLists(ddbCharRaw);
       const ft = buildFeatureListKo(features);
+	  
+	  const it = buildItemListKo(ddbCharRaw);
+      setItemText(it);
 
       // 코코포리아 JSON (commands는 빈 값)
       const cc = buildCcfoliaCharacterJson({
@@ -242,7 +247,17 @@ export default function Home() {
             style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
           />
         </section>
-
+		
+		<section>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>[장비/소지금]</div>
+          <textarea
+            value={itemText}
+            readOnly
+            rows={8}
+            style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ccc" }}
+          />
+        </section>
+		
         <section>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div style={{ fontWeight: 700 }}>[CCFOLIA JSON]</div>
