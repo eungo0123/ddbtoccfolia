@@ -3,6 +3,17 @@
 export const ABILITIES = ["str", "dex", "con", "int", "wis", "cha"] as const;
 export type AbilityKey = typeof ABILITIES[number];
 
+// ... 기존 코드들 ...
+
+// ✅ 이 부분을 추가해주세요!
+export type NormalizedAttack = {
+  name: string;
+  attackBonus: number;
+  damage: string;
+  damageType: string;
+  notes: string;
+};
+
 export const ABILITY_LABEL_KO: Record<AbilityKey, string> = {
   str: "근력",
   dex: "민첩",
