@@ -58,16 +58,10 @@ export const SKILL_ABILITY: Record<string, AbilityKey> = {
   persuasion: "cha",
 };
 
-export type NormalizedAttack = {
-  name: string;
-  attackBonus: number;
-  damage: string;
-  damageType: string;
-  notes: string;
-};
-
 export type NormalizedBasic = {
   name: string;
+  // ✅ [추가] 멀티클래스 정보 문자열 (예: "Fighter 3 / Wizard 2")
+  classesStr: string; 
   level: number;
   proficiencyBonus: number;
   
@@ -204,14 +198,12 @@ function getSpellBonusesFromModifiers(ddb: any) {
   return { spellAttackBonusBonus: atk, spellSaveDcBonus: dc };
 }
 
-// ✅ [추가] 레벨당 HP 보너스 계산 (Tough 피트, 힐 드워프 등)
 function getHpBonusesPerLevel(ddb: any) {
   const mods = getAllModifiers(ddb);
   let perLevel = 0;
 
   for (const m of mods) {
     const sub = String(m?.subType ?? "").toLowerCase();
-    // "hit-points-per-level" 타입의 수정치를 찾습니다.
     if (sub === "hit-points-per-level") {
       const v = Number(m?.value ?? 0);
       if (Number.isFinite(v)) perLevel += v;
@@ -233,7 +225,20 @@ function totalLevel(ddb: any) {
   return classes.reduce((sum: number, c: any) => sum + Number(c?.level ?? 0), 0);
 }
 
-// ✅ [수정] HP 계산 로직 최종판 (Modifiers 반영)
+// ✅ [추가] 멀티클래스 이름 생성기 (예: "Fighter 3 / Wizard 2")
+function getClassesString(ddb: any): string {
+  const classes = Array.isArray(ddb?.classes) ? ddb.classes : [];
+  if (classes.length === 0) return "Unknown Class";
+
+  return classes
+    .map((c: any) => {
+      const name = c?.definition?.name ?? "Unknown";
+      const lvl = c?.level ?? 0;
+      return `${name} ${lvl}`;
+    })
+    .join(" / ");
+}
+
 function getHp(ddb: any, level: number, conMod: number) {
   const override = Number(ddb?.overrideHitPoints ?? 0);
   const removed = Number(ddb?.removedHitPoints ?? 0);
@@ -244,23 +249,15 @@ function getHp(ddb: any, level: number, conMod: number) {
   if (override > 0) {
     max = override;
   } else {
-    // 1. 기본 주사위 합 + 깡 보너스
     const base = Number(ddb?.baseHitPoints ?? 0);
     const bonus = Number(ddb?.bonusHitPoints ?? 0);
-
-    // 2. CON 보너스 (레벨 * 수정치)
     const conBonus = conMod * level;
-
-    // 3. 특수 보너스 (레벨 * 특성보너스) - Tough 피트 등
     const perLevelBonus = getHpBonusesPerLevel(ddb) * level;
 
-    // 최종 합산
     max = base + bonus + conBonus + perLevelBonus;
   }
 
-  // 코코포리아는 (Max - Removed)로 현재 체력 표시
   const cur = max - removed + temp;
-
   return { max, cur: Math.max(0, cur) };
 }
 
@@ -299,6 +296,9 @@ function getSpeedFt(ddb: any) {
 export function normalizeBasic(ddb: any): NormalizedBasic {
   const name = String(ddb?.name ?? "").trim() || "Unnamed";
   const level = totalLevel(ddb) || 1;
+  
+  // ✅ [추가] 여기서 클래스 문자열 생성
+  const classesStr = getClassesString(ddb);
 
   const mods = getAllModifiers(ddb);
   const pbFromMods = mods
@@ -317,9 +317,7 @@ export function normalizeBasic(ddb: any): NormalizedBasic {
     cha: mod(abilityScores.cha),
   };
 
-  // ✅ [수정] getHp 호출
   const { max: hpMax, cur: hpCurrent } = getHp(ddb, level, abilityMods.con);
-  
   const ac = getAc(ddb, abilityMods.dex);
   const speedFt = getSpeedFt(ddb);
   const initiative = abilityMods.dex;
@@ -335,6 +333,7 @@ export function normalizeBasic(ddb: any): NormalizedBasic {
 
   return {
     name,
+    classesStr, // ✅ 결과에 포함
     level,
     proficiencyBonus,
     spellAttackBonusBonus,
