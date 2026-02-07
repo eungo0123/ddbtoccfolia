@@ -31,7 +31,7 @@ export type ClassInfo = {
   level: number;
 };
 
-// ✅ [복구] ddbAttacks.ts에서 사용하는 공격 타입 정의
+// ✅ [수정] notes 속성 추가!
 export type NormalizedAttack = {
   name: string;
   range: string;
@@ -39,6 +39,7 @@ export type NormalizedAttack = {
   damage: string;
   damageType: string;
   isMagic: boolean;
+  notes: string; // 이 부분이 빠져서 에러가 났었습니다.
 };
 
 export type NormalizedBasic = {
