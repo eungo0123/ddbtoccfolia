@@ -1,6 +1,9 @@
 // src/lib/ddbNormalize.ts
 import { calculateArmorClass } from "./ddbAc";
 
+// ==========================================
+// 1. 상수 및 타입 정의
+// ==========================================
 export const ABILITIES = ["str", "dex", "con", "int", "wis", "cha"] as const;
 export type AbilityKey = typeof ABILITIES[number];
 
@@ -84,6 +87,9 @@ export type NormalizedBasic = {
   skillMods: Record<string, number>;
 };
 
+// ==========================================
+// 2. 헬퍼 함수들
+// ==========================================
 function mod(score: number) {
   return Math.floor((score - 10) / 2);
 }
@@ -211,14 +217,50 @@ function totalLevel(ddb: any) {
   return classes.reduce((sum: number, c: any) => sum + Number(c?.level ?? 0), 0);
 }
 
-function getHp(ddb: any) {
-  const max = Number(ddb?.overrideHitPoints ?? 0) ||
-    Number(ddb?.baseHitPoints ?? 0) + Number(ddb?.bonusHitPoints ?? 0) || 1;
-  const cur = Number(ddb?.currentHitPoints ?? 0) || Number(ddb?.hitPoints ?? 0) || max;
-  return { max, cur };
+// ✅ [수정된 부분] HP 계산 로직 강화
+// conMod와 level을 인자로 받아서 정확하게 계산합니다.
+function getHp(ddb: any, level: number, conMod: number) {
+  // 1. 수동 오버라이드(Override)가 있으면 최우선
+  const override = Number(ddb?.overrideHitPoints ?? 0);
+  
+  // 2. 받은 데미지 (DDB는 currentHP 대신 'removedHitPoints'를 씀)
+  const removed = Number(ddb?.removedHitPoints ?? 0);
+  // 3. 임시 체력
+  const temp = Number(ddb?.temporaryHitPoints ?? 0);
+
+  let max = 0;
+
+  if (override > 0) {
+    max = override;
+  } else {
+    // 4. 기본 HP 계산
+    // baseHitPoints: 주사위 굴림 합계 (보통 CON 보정치 미포함)
+    // bonusHitPoints: 기타 보너스
+    const base = Number(ddb?.baseHitPoints ?? 0);
+    const bonus = Number(ddb?.bonusHitPoints ?? 0);
+
+    // 5. 레벨별 CON 보정치 합산 (레벨 * CON수정치)
+    const conBonus = conMod * level;
+
+    // 6. 기타 수정치 (Tough 피트, Draconic Sorcerer 등)
+    // (완벽하려면 modifiers를 다 뒤져야 하지만, 일단 conBonus 누락이 제일 큼)
+    // "Tough" 피트 같은 경우 보통 modifiers에 "hit-points-per-level"로 들어있는데
+    // 간단하게 bonusHitPoints에 포함되는 경우도 많음.
+    // 여기서는 기본 공식인 [주사위합 + 기타 + (레벨*CON)]을 사용
+    max = base + bonus + conBonus;
+  }
+
+  // 현재 체력 = 최대 체력 - 받은 데미지 + 임시 체력
+  // (임시 체력을 현재 체력에 합칠지 말지는 취향이지만, 코코포리아는 보통 합쳐서 보여주는 게 편함)
+  // 여기서는 순수 현재 체력만 계산하고, 임시 체력은 따로 표시하거나 합산 가능.
+  // 코코포리아 Status 바를 위해 (Max - Removed)로 계산.
+  
+  // 임시체력은 보통 "현재 체력 위에 덧씌우는" 개념이라 Max를 넘길 수 있음.
+  const cur = max - removed + temp; 
+
+  return { max, cur: Math.max(0, cur) }; // 음수 방지
 }
 
-// ✅ [수정] getAc가 이제 dexMod를 인자로 받습니다.
 function getAc(ddb: any, dexMod: number) {
   const direct = [ddb?.armorClass, ddb?.ac, ddb?.overrideArmorClass]
     .map((x: any) => Number(x))
@@ -226,7 +268,6 @@ function getAc(ddb: any, dexMod: number) {
 
   if (direct) return direct;
 
-  // ✅ [수정] calculateArmorClass에 dexMod 전달
   const calculated = calculateArmorClass(ddb, dexMod);
 
   const mods = getAllModifiers(ddb);
@@ -249,6 +290,9 @@ function getSpeedFt(ddb: any) {
   return s1 || s2 || s3 || s4 || 30;
 }
 
+// ==========================================
+// 3. 메인 변환 함수
+// ==========================================
 export function normalizeBasic(ddb: any): NormalizedBasic {
   const name = String(ddb?.name ?? "").trim() || "Unnamed";
   const level = totalLevel(ddb) || 1;
@@ -262,21 +306,19 @@ export function normalizeBasic(ddb: any): NormalizedBasic {
 
   // 1. 능력치 계산
   const abilityScores = getAbilityScores(ddb);
-  // 2. 수정치 계산 (여기서 종족/피트 보너스 포함된 정확한 값이 나옴)
   const abilityMods: Record<AbilityKey, number> = {
     str: mod(abilityScores.str),
     dex: mod(abilityScores.dex),
-    con: mod(abilityScores.con),
+    con: mod(abilityScores.con), // HP 계산에 필요
     int: mod(abilityScores.int),
     wis: mod(abilityScores.wis),
     cha: mod(abilityScores.cha),
   };
 
-  const { max: hpMax, cur: hpCurrent } = getHp(ddb);
+  // ✅ [수정] HP 계산 시 레벨과 건강 보정치를 전달
+  const { max: hpMax, cur: hpCurrent } = getHp(ddb, level, abilityMods.con);
   
-  // ✅ [수정] getAc를 호출할 때 정확한 민첩 수정치를 전달
   const ac = getAc(ddb, abilityMods.dex);
-  
   const speedFt = getSpeedFt(ddb);
   const initiative = abilityMods.dex;
 
