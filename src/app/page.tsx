@@ -20,10 +20,12 @@ const ABILITY_ID_TO_KEY: Record<number, AbilityKey> = {
 
 // src/app/page.tsx
 
+// src/app/page.tsx
+
 function getSpellAbilityFromDdb(raw: any): AbilityKey {
   const classes = Array.isArray(raw?.classes) ? raw.classes : [];
   
-  // 1. D&D Beyond가 명시한 ID가 있으면 최우선
+  // 1. D&D Beyond가 명시한 ID가 있으면 확인
   for (const c of classes) {
     const def = c?.definition ?? c?.class?.definition ?? c?.class;
     const id = Number(def?.spellCastingAbilityId ?? def?.spellcastingAbilityId ?? 0);
@@ -31,8 +33,11 @@ function getSpellAbilityFromDdb(raw: any): AbilityKey {
   }
 
   // 2. ID가 없으면 클래스 이름으로 추측 (여기가 중요!)
+  // ✅ 이전 코드에는 이 부분이 없어서 위저드여도 매력(CHA)으로 계산되고 있었습니다.
   for (const c of classes) {
-    const name = String(c?.definition?.name ?? c?.class?.name ?? "").toLowerCase();
+    // definition.name 뿐만 아니라 class.name 등 여러 곳을 찔러봅니다.
+    const name = String(c?.definition?.name ?? c?.class?.definition?.name ?? c?.class?.name ?? "").toLowerCase();
+    
     if (name.includes("wizard") || name.includes("artificer") || name.includes("rogue") || name.includes("fighter")) return "int";
     if (name.includes("cleric") || name.includes("druid") || name.includes("ranger") || name.includes("monk")) return "wis";
     if (name.includes("warlock") || name.includes("sorcerer") || name.includes("bard") || name.includes("paladin")) return "cha";
@@ -117,19 +122,22 @@ export default function Home() {
 
       // 주문 명중/DC 요약 (딱 2줄만)
       // 주문 명중/DC 요약
-      const spellAbility = getSpellAbilityFromDdb(ddbCharRaw);
+     const spellAbility = getSpellAbilityFromDdb(ddbCharRaw);
       const mod = base.abilityMods[spellAbility] ?? 0;
       
       // ✅ [수정] 아이템 보너스(spellAttackBonusBonus)까지 모두 더하기
-      // 공식: 숙련도 + 능력치수정 + 아이템보너스
       const itemAtk = base.spellAttackBonusBonus ?? 0;
       const itemDc = base.spellSaveDcBonus ?? 0;
 
       const spellAttackBonus = base.proficiencyBonus + mod + itemAtk;
       const spellSaveDc = 8 + base.proficiencyBonus + mod + itemDc;
 
-      const sp = `주문 능력치: ${spellAbility.toUpperCase()} (수정치 ${mod >= 0 ? "+" + mod : mod})\n주문 명중: 1d20+${spellAttackBonus}\n주문 내성 DC: ${spellSaveDc}`;
-      // 피쳐/피트 목록
+      // 주문 능력치가 뭔지(INT인지 WIS인지)도 같이 보여주면 디버깅하기 좋습니다.
+      const sp = `주문 능력치: ${spellAbility.toUpperCase()} (수정치 ${mod >= 0 ? "+" + mod : mod})\n주문 명중 1d20+${spellAttackBonus}\n주문 내성 DC ${spellSaveDc}`;
+	  
+	  
+	  
+	  // 피쳐/피트 목록
       const features = extractFeatureLists(ddbCharRaw);
       const ft = buildFeatureListKo(features);
 
