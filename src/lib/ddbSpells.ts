@@ -21,97 +21,75 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   const lines: string[] = [];
 
   // ====================================================
-  // 1. 데이터 소스 확보 (모든 구멍을 다 뒤짐)
+  // 1. 데이터 소스 확보
   // ====================================================
   const rawClassSpells = ddb?.classSpells ?? ddb?.character?.classSpells ?? [];
   const rawClasses = ddb?.classes ?? ddb?.character?.classes ?? [];
-  
-  // 혹시 모를 누락 대비 (Flat List)
-  const flatClassSpells = ddb?.spells?.class ?? ddb?.character?.spells?.class ?? [];
   
   const spellsRace = ddb?.spells?.race ?? ddb?.character?.spells?.race ?? [];
   const spellsFeat = ddb?.spells?.feat ?? ddb?.character?.spells?.feat ?? [];
   const spellsItem = ddb?.spells?.item ?? ddb?.character?.spells?.item ?? [];
   const spellsBg = ddb?.spells?.background ?? ddb?.character?.spells?.background ?? [];
 
-  // 전역 데미지 정보 수집용
+  // 데미지 정보 수집용
   const damageInfoList: string[] = [];
+
+  console.log("=== [DDB Spells Debug Start] ===");
 
   // 헬퍼: 주문 목록 처리 및 출력
   const processSpellList = (spells: any[], title: string, abilityKey: string, showHeader: boolean) => {
     if (!Array.isArray(spells) || spells.length === 0) return;
-
-    // 🔥 [핵심 수정] 필터링 로직을 "관대하게" 변경 (엄격한 true 체크 제거)
-    const validSpells = spells.filter(s => {
-      const def = s?.definition;
-      if (!def) return false;
-      const lvl = def.level ?? 0;
-
-      // 1. 소마법(0레벨)은 목록에 있다면 무조건 사용 가능 (Learned Cantrip)
-      if (lvl === 0) return true;
-      
-      // 2. 준비됨(Prepared) 관련 플래그 확인 (Truthy 체크로 변경)
-      // DDB 데이터가 가끔 true 대신 1이나 문자열을 줄 수도 있음
-      if (s.prepared || s.alwaysPrepared) return true;
-      
-      // 3. 도메인 주문 등 정의(Def) 자체에 항상 준비됨이 박힌 경우
-      if (def.alwaysPrepared) return true;
-
-      // 4. 아는 주문(Known) 취급
-      if (s.countsAsKnownSpell || s.isKnown) return true;
-
-      // 5. 활성화됨(Active) / 부여됨(Granted)
-      if (s.active || s.granted) return true;
-
-      // 6. 제한적 사용(Limited Use)이 있는 경우 (종족/피트 특수 능력 등)
-      if (s.limitedUse) return true;
-
-      // 7. 커스텀 주문 (사용자가 직접 추가)
-      if (s.isCustom) return true;
-
-      // 8. [신규] 주문 준비 모드(preparationMode) 확인
-      // 0: Prepared (준비 필요), 1: Known (알면 씀), 2: At Will (무한), 4: Domain (항상 준비?)
-      // 모드가 0이 아니면(즉, Known이나 At Will 등이면) 준비 플래그가 없어도 사용 가능할 수 있음
-      if (s.preparationMode && s.preparationMode !== 0) return true;
-
-      // 9. [비상] 만약 위 조건 다 통과 못했는데 'Class Spell' 목록에 있고 레벨이 1 이상이라면?
-      // 보통은 준비 안 된 주문(전체 리스트)이므로 거르는 게 맞음.
-      // 하지만 Domain 주문이 버그로 Flags가 다 꺼져있을 수 있음.
-      // 여기서는 안전을 위해 일단 스킵하지만, 정 안되면 이 주석을 풀어서 다 가져와야 함.
-      
-      return false;
-    });
-
-    if (validSpells.length === 0) return;
-
-    // 헤더 출력
-    if (showHeader) {
-      const abilityMod = basic.abilityMods[abilityKey as keyof typeof basic.abilityMods] ?? 0;
-      const itemDc = basic.spellSaveDcBonus ?? 0;
-      const itemAtk = basic.spellAttackBonusBonus ?? 0;
-      
-      const saveDc = 8 + basic.proficiencyBonus + abilityMod + itemDc;
-      const attackBonus = basic.proficiencyBonus + abilityMod + itemAtk;
-
-      lines.push(`### ${title} [기반: ${abilityKey.toUpperCase()}]`);
-      lines.push(`(DC ${saveDc} / 명중 +${attackBonus})`);
-      lines.push("");
-    }
 
     // 분류용 바구니
     const allSpells: string[] = [];
     const attackSpells: string[] = [];
     const saveSpells: string[] = [];
     const otherSpells: string[] = [];
+    
+    // ✅ [추가] 준비되지 않았지만 리스트에 있는 주문들
+    const unpreparedSpells: string[] = [];
 
-    for (const s of validSpells) {
-      const def = s.definition;
+    for (const s of spells) {
+      const def = s?.definition;
+      if (!def) continue;
       
-      // ✅ [수정] 이름 우선순위: 사용자가 바꾼 이름(overrideName) > 원래 이름(name)
-      // 이렇게 하면 "Sacred Flame"을 "Holy Word"로 이름만 바꿨을 때 혼동을 줄일 수 있습니다.
       const name = s.overrideName || def.name || "Unknown";
+      const lvl = def.level ?? 0;
       
-      // 중복 방지 (같은 이름이 여러 출처에서 올 수 있음)
+      // 디버깅 로그 출력 (F12 콘솔 확인용)
+      // "Bless" 같은 주문이 왜 false인지 확인 가능
+      const isPrepared = s.prepared || s.alwaysPrepared || def.alwaysPrepared || s.countsAsKnownSpell || s.active || s.granted || s.limitedUse || s.isCustom || (s.preparationMode && s.preparationMode !== 0);
+      
+      // ✅ [강제 표시 정책]
+      // 1. 준비된 주문은 당연히 표시 (Pass)
+      // 2. 준비되지 않았어도(false), "소마법(lvl 0)"은 표시
+      // 3. 준비되지 않았어도, 리스트에 존재한다면 "(미준비)" 태그를 달고 표시 (디버깅 목적 및 누락 방지)
+      //    -> 단, 클레릭 전체 주문 목록(100개+)이 쏟아지는 걸 막기 위해, 'active'나 'flags' 등을 볼 수도 있지만,
+      //       사용자가 "Bless가 없다"고 했으므로 일단 다 보여주는게 낫습니다. 
+      //       다만 너무 많으면 곤란하니, 일단 로그에는 다 찍고, 리스트에는 '준비된 것' 위주로 넣되
+      //       만약 사용자가 정말 원한다면 보이게 해야 합니다.
+      //       여기서는 "준비 여부"를 체크해서 통과하면 normal, 아니면 unprepared 목록에 넣습니다.
+
+      let finalInclude = false;
+      let tag = "";
+
+      if (isPrepared) {
+        finalInclude = true;
+      } else if (lvl === 0) {
+        finalInclude = true; // 소마법은 무조건
+      } else {
+        // 준비 안 된 주문 -> "(미준비)" 목록으로 보냄
+        // 단, 클레릭처럼 전체 리스트(classSpells)를 다 주는 경우 너무 많을 수 있음.
+        // 여기서는 콘솔에만 찍고 넘어가거나, 아니면 특정 주문(Bless 등)만 살릴 수는 없음.
+        // 절충안: unpreparedSpells 배열에 담아두고, 섹션을 분리해서 보여줌.
+        unpreparedSpells.push(name);
+        console.log(`[SKIP] ${name} (Lvl ${lvl}) - Prepared: ${s.prepared}, Always: ${s.alwaysPrepared}`);
+        continue; 
+      }
+      
+      console.log(`[OK] ${name} (Lvl ${lvl})`);
+
+      // 중복 방지
       if (allSpells.includes(name)) continue;
 
       allSpells.push(name);
@@ -145,10 +123,28 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
     attackSpells.sort(sortFn);
     saveSpells.sort(sortFn);
     otherSpells.sort(sortFn);
+    unpreparedSpells.sort(sortFn); // 미준비 목록 정렬
 
-    // 출력
-    lines.push(...allSpells);
-    lines.push("");
+    if (allSpells.length === 0 && unpreparedSpells.length === 0) return;
+
+    // 헤더 출력
+    if (showHeader) {
+      const abilityMod = basic.abilityMods[abilityKey as keyof typeof basic.abilityMods] ?? 0;
+      const itemDc = basic.spellSaveDcBonus ?? 0;
+      const itemAtk = basic.spellAttackBonusBonus ?? 0;
+      
+      const saveDc = 8 + basic.proficiencyBonus + abilityMod + itemDc;
+      const attackBonus = basic.proficiencyBonus + abilityMod + itemAtk;
+
+      lines.push(`### ${title} [기반: ${abilityKey.toUpperCase()}]`);
+      lines.push(`(DC ${saveDc} / 명중 +${attackBonus})`);
+      lines.push("");
+    }
+
+    if (allSpells.length > 0) {
+        lines.push(...allSpells);
+        lines.push("");
+    }
 
     if (attackSpells.length > 0) {
       lines.push("[명중 주문]");
@@ -164,6 +160,21 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       lines.push("[기타/치유/버프]");
       lines.push(...otherSpells);
       lines.push("");
+    }
+
+    // ✅ [추가] 미준비 목록 출력 (디버깅용)
+    // 만약 Bless가 여기 들어있다면 DDB에서 prepared 체크를 안 한 것입니다.
+    if (unpreparedSpells.length > 0) {
+        // 너무 많으면(20개 이상) 접거나 생략해야겠지만, 일단 원인을 찾기 위해 상위 10개만 예시로 보여주거나 다 보여줍니다.
+        // 클레릭은 전체 주문을 다 알기 때문에 이 목록이 매우 길 수 있습니다.
+        // 따라서, "Bless"나 "Spiritual Weapon" 같이 사용자가 찾던 주문이 여기에 있는지 확인이 필요합니다.
+        
+        // 일단 주석 처리하지 않고, 별도 섹션으로 표시합니다.
+        lines.push("----------------");
+        lines.push("[준비되지 않음(Data) - 확인용]");
+        lines.push("(D&D Beyond에서 'Prepare' 버튼을 눌렀는지 확인하세요)");
+        lines.push(...unpreparedSpells);
+        lines.push("");
     }
     
     lines.push("--------------------------------");
@@ -188,12 +199,14 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   }
 
   // ====================================================
-  // 3. 기타 주문 처리 (종족, 피트, 아이템, 플랫 클래스)
+  // 3. 기타 주문 처리
   // ====================================================
-  const extraSpells = [...spellsRace, ...spellsFeat, ...spellsItem, ...spellsBg, ...flatClassSpells];
+  const extraSpells = [...spellsRace, ...spellsFeat, ...spellsItem, ...spellsBg];
   if (extraSpells.length > 0) {
     processSpellList(extraSpells, "특수/종족/피트/아이템", "wis", true);
   }
+
+  console.log("=== [DDB Spells Debug End] ===");
 
   // ====================================================
   // 4. 데미지 정보 푸터
@@ -207,7 +220,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
     lines.push("");
   }
 
-  if (lines.length === 0) return "준비된 주문이 없습니다.";
+  if (lines.length === 0) return "표시할 주문이 없습니다.";
 
   return lines.join("\n").trim();
 }
