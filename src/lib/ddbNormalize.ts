@@ -31,8 +31,6 @@ export type ClassInfo = {
   level: number;
 };
 
-// ⚠️ NormalizedAttack 타입 삭제함 (ddbAttacks.ts에서 자체 관리)
-
 export type NormalizedBasic = {
   name: string;
   classesStr: string; 
@@ -72,57 +70,31 @@ function getAllModifiers(ddb: any): any[] {
   return [];
 }
 
-const FULLNAME: Record<AbilityKey, string> = {
-  str: "strength", dex: "dexterity", con: "constitution", int: "intelligence", wis: "wisdom", cha: "charisma",
-};
-
-function sumAbilityScoreBonusesFromModifiers(ddb: any, key: AbilityKey) {
-  const mods = getAllModifiers(ddb);
-  const full = FULLNAME[key];
-  let sum = 0;
-  for (const m of mods) {
-    const stRaw = String(m?.subType ?? "").toLowerCase().replace(/\s+/g, "");
-    const fnRaw = String(m?.friendlySubtypeName ?? "").toLowerCase();
-    const typeRaw = String(m?.type ?? "").toLowerCase();
-    const hit = stRaw.includes(full) && stRaw.includes("score") || fnRaw.includes(full) && fnRaw.includes("score") || (typeRaw.includes("bonus") && (stRaw.includes(full) || fnRaw.includes(full)));
-    if (!hit) continue;
-    const v = Number(m?.value ?? 0);
-    if (Number.isFinite(v)) sum += v;
+/**
+ * 능력치 계산 핵심 함수 (수정됨)
+ * 불필요한 modifiers 반복문을 제거하고 D&D Beyond가 제공하는 계산된 필드를 우선합니다.
+ */
+function getFinalAbilityScore(ddb: any, i: number) {
+  // 1. Override 확인 (예: 오우거 힘의 장갑 등 고정 수치 아이템)
+  const overrideVal = ddb?.overrideStats?.[i]?.value;
+  if (overrideVal != null) {
+      return Number(overrideVal);
   }
-  return sum;
-}
 
-function getAbilityScoreSetFromModifiers(ddb: any, key: AbilityKey): number | null {
-  const mods = getAllModifiers(ddb);
-  const full = FULLNAME[key];
-  let best: number | null = null;
-  for (const m of mods) {
-    const stRaw = String(m?.subType ?? "").toLowerCase();
-    const typeRaw = String(m?.type ?? "").toLowerCase();
-    if (!stRaw.includes(full)) continue;
-    if (!typeRaw.includes("set") && !typeRaw.includes("override")) continue;
-    const v = Number(m?.value ?? NaN);
-    if (Number.isFinite(v)) { best = best == null ? v : Math.max(best, v); }
-  }
-  return best;
-}
+  // 2. Base(주사위/포인트) + Bonus(종족/ASI/피트)
+  // D&D Beyond는 bonusStats에 이미 종족/피트 보너스를 합산해서 줍니다.
+  const baseVal = Number(ddb?.stats?.[i]?.value ?? ddb?.stats?.[i] ?? 10);
+  const bonusVal = Number(ddb?.bonusStats?.[i]?.value ?? 0);
 
-function getFinalAbilityScore(ddb: any, i: number, key: AbilityKey) {
-  const baseVal = Number(ddb?.stats?.[i]?.value ?? ddb?.stats?.[i] ?? 0);
-  const overrideVal = ddb?.overrideStats?.[i]?.value != null ? Number(ddb.overrideStats[i].value) : null;
-  const bonusVal = ddb?.bonusStats?.[i]?.value != null ? Number(ddb.bonusStats[i].value) : 0;
-  const modBonus = sumAbilityScoreBonusesFromModifiers(ddb, key);
-  let score = overrideVal != null ? overrideVal : baseVal + bonusVal + modBonus;
-  const setVal = getAbilityScoreSetFromModifiers(ddb, key);
-  if (setVal != null && Number.isFinite(setVal)) { score = Math.max(score, setVal); }
-  return score;
+  return baseVal + bonusVal;
 }
 
 function getAbilityScores(ddb: any): Record<AbilityKey, number> {
   const out: any = {};
+  // 순서: STR(0), DEX(1), CON(2), INT(3), WIS(4), CHA(5)
   for (let i = 0; i < 6; i++) {
     const key = ABILITIES[i] as AbilityKey;
-    out[key] = getFinalAbilityScore(ddb, i, key);
+    out[key] = getFinalAbilityScore(ddb, i);
   }
   return out as Record<AbilityKey, number>;
 }
@@ -134,8 +106,14 @@ function getSpellBonusesFromModifiers(ddb: any) {
   for (const m of mods) {
     const val = Number(m?.value ?? 0);
     if (!Number.isFinite(val) || val === 0) continue;
+    
+    // 유효한 Modifier인지 체크 (타입이 bonus여야 함)
+    // 일부 데이터에서 type이 undefined인 경우는 무시
+    if (m.type && m.type !== "bonus") continue;
+
     const st = String(m?.subType ?? "").toLowerCase().replace(/\s+/g, "");
     const fn = String(m?.friendlySubtypeName ?? "").toLowerCase();
+    
     if (st.includes("spell-attack") || fn.includes("spell attack")) { atk += val; }
     if (st.includes("spell-save-dc") || fn.includes("save dc") || st.includes("spell-save")) { dc += val; }
   }
@@ -196,16 +174,35 @@ function getHp(ddb: any, level: number, conMod: number) {
 }
 
 function getAc(ddb: any, dexMod: number) {
-  const direct = [ddb?.armorClass, ddb?.ac, ddb?.overrideArmorClass].map((x: any) => Number(x)).find((n: number) => Number.isFinite(n) && n > 0);
-  if (direct) return direct;
+  // 1. 직접 입력된 AC가 있으면 최우선 (Custom AC)
+  const override = Number(ddb?.overrideArmorClass);
+  if (Number.isFinite(override) && override > 0) return override;
+
+  // 2. 장비 기반 AC 계산
   const calculated = calculateArmorClass(ddb, dexMod);
+
+  // 3. 기타 보너스 (Modifiers)
+  // [수정] 방어구/방패 AC는 calculateArmorClass에서 이미 처리했으므로,
+  // 여기서는 Ring of Protection 같은 "순수 보너스"만 더해야 합니다.
   const mods = getAllModifiers(ddb);
-  const acBonuses = mods.filter((m: any) => {
+  let bonusAc = 0;
+
+  for (const m of mods) {
+    // Unarmored Defense 등은 calculateArmorClass 내에서 로직 처리가 복잡하므로
+    // 단순 보너스 아이템(Ring of Protection 등)만 챙깁니다.
+    // type: "bonus", subType: "armor-class" 인 것만
+    
+    if (m.type !== "bonus") continue;
+    
     const sub = String(m?.subType ?? "").toLowerCase();
-    const t = String(m?.type ?? "").toLowerCase();
-    return sub.includes("armor-class") || sub === "ac" || (t.includes("bonus") && sub.includes("armor"));
-  }).reduce((sum: number, m: any) => sum + Number(m?.value ?? 0), 0);
-  return calculated + acBonuses;
+    // const t = String(m?.type ?? "").toLowerCase();
+
+    if (sub === "armor-class" || sub === "ac") {
+        bonusAc += Number(m?.value ?? 0);
+    }
+  }
+
+  return calculated + bonusAc;
 }
 
 function getSpeedFt(ddb: any) {
@@ -253,7 +250,9 @@ function getFinalSaveMod(ddb: any, abilityKey: string, abilityMod: number, pb: n
   const target2 = abilityKey;
   for (const m of mods) {
     const sub = (m?.subType ?? "").toLowerCase();
-    if (sub === target1 || sub === target2) {
+    
+    // 내성 굴림 관련 수정치 찾기
+    if (sub === target1 || (m.type === "proficiency" && sub === target2)) {
       if (m.type === "proficiency") isProficient = true;
       if (m.type === "bonus") bonus += Number(m.value || 0);
     }
@@ -274,7 +273,9 @@ export function normalizeBasic(ddb: any): NormalizedBasic {
   const pbFromMods = mods.filter((m: any) => m?.type === "proficiency-bonus").reduce((sum: number, m: any) => sum + Number(m?.value ?? 0), 0) || 0;
   const proficiencyBonus = pbFromMods || pbFromLevel(level);
 
+  // ✅ [수정] 능력치 계산 로직 간소화 (중복 합산 방지)
   const abilityScores = getAbilityScores(ddb);
+  
   const abilityMods: Record<AbilityKey, number> = {
     str: mod(abilityScores.str), dex: mod(abilityScores.dex), con: mod(abilityScores.con),
     int: mod(abilityScores.int), wis: mod(abilityScores.wis), cha: mod(abilityScores.cha),
@@ -283,7 +284,7 @@ export function normalizeBasic(ddb: any): NormalizedBasic {
   const { max: hpMax, cur: hpCurrent } = getHp(ddb, level, abilityMods.con);
   const ac = getAc(ddb, abilityMods.dex);
   const speedFt = getSpeedFt(ddb);
-  const initiative = abilityMods.dex;
+  const initiative = abilityMods.dex; // (Note: Alert feat 등 이니셔티브 보너스는 추가 구현 필요할 수 있음)
 
   const saveMods: Record<AbilityKey, number> = {} as any;
   for (const key of ABILITIES) {
