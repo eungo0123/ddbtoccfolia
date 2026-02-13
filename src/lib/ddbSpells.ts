@@ -21,11 +21,11 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   const lines: string[] = [];
   
   // ====================================================
-  // 1. 주문 데이터 "영혼까지 끌어모으기" (Deep Collection)
+  // 1. 주문 데이터 전수 조사 (Scavenger Mode)
   // ====================================================
   const allSpells: any[] = [];
   
-  // (1) 표준 위치: classSpells
+  // (1) 기본 위치: classSpells (일반적으로 준비한 주문)
   const rawClassSpells = ddb?.classSpells ?? ddb?.character?.classSpells;
   if (Array.isArray(rawClassSpells)) {
      for (const group of rawClassSpells) {
@@ -33,7 +33,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
      }
   }
 
-  // (2) 표준 위치: spells object (race, feat, item, background 등)
+  // (2) 기타 위치: spells object (종족, 피트, 아이템 등)
   const spellsObj = ddb?.spells ?? ddb?.character?.spells;
   if (spellsObj && typeof spellsObj === 'object') {
       for (const key of Object.keys(spellsObj)) {
@@ -44,39 +44,42 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       }
   }
 
-  // (3) 비표준 위치: Classes 내부 구조 탐색 (서브클래스 피쳐 등)
+  // (3) 🔥 핵심: 서브클래스 피쳐 내부에 숨은 주문 찾기 (권역 주문은 여기 숨어있음!)
   const classes = ddb?.classes ?? ddb?.character?.classes;
   if (Array.isArray(classes)) {
       for (const cls of classes) {
           // A. 클래스 내부에 classSpells가 박혀있는 경우
           if (Array.isArray(cls.classSpells)) allSpells.push(...cls.classSpells);
 
-          // B. 클래스/서브클래스 "기능(Feature)"이 주문을 부여하는 경우 (권역 주문이 여기 숨기도 함)
-          const features = [
-              ...(cls.definition?.classFeatures ?? []),
-              ...(cls.subclassDefinition?.classFeatures ?? []),
-              ...(cls.classFeatures ?? [])
+          // B. 서브클래스 정의(subclassDefinition) 뒤지기
+          const feats = [
+              ...(cls.definition?.classFeatures ?? []),      // 기본 클래스 피쳐
+              ...(cls.subclassDefinition?.classFeatures ?? []), // 서브클래스 피쳐 (권역 주문)
+              ...(cls.classFeatures ?? [])                   // 캐릭터 적용 피쳐
           ];
           
-          for (const feat of features) {
-              if (Array.isArray(feat.spells)) allSpells.push(...feat.spells);
-              // definition 안에 spells가 있는 경우
-              if (feat.definition && Array.isArray(feat.definition.spells)) {
-                  allSpells.push(...feat.definition.spells);
+          for (const f of feats) {
+              // 피쳐 안에 'spells' 배열이 있으면 가져옴
+              if (Array.isArray(f.spells)) {
+                  allSpells.push(...f.spells);
+              }
+              // 피쳐 정의(definition) 안에 'spells'가 있으면 가져옴
+              if (f.definition && Array.isArray(f.definition.spells)) {
+                  allSpells.push(...f.definition.spells);
               }
           }
       }
   }
 
   // ====================================================
-  // 2. 수집된 주문 필터링 및 분류
+  // 2. 필터링 및 중복 제거
   // ====================================================
   const validSpells: any[] = [];
-  const hiddenSpells: string[] = []; // 준비 안 됨 (이름만 저장)
-  const seenNames = new Set<string>(); // 중복 제거용
+  const hiddenSpells: string[] = []; 
+  const seenNames = new Set<string>(); // 이름 기준 중복 방지
 
   for (const s of allSpells) {
-    const def = s?.definition ?? s; // 구조가 다를 수 있으므로 폴백
+    const def = s?.definition ?? s; // 구조가 다를 수 있음
     if (!def || !def.name) continue;
 
     const name = String(s.overrideName || def.name).trim();
@@ -92,7 +95,8 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       continue;
     }
     
-    // 2. 준비된 주문인지 확인 (조건 관대하게)
+    // 2. 준비된 주문인지 확인
+    // 권역 주문은 보통 alwaysPrepared: true 속성을 가집니다.
     const isPrepared = 
       s.prepared || 
       s.alwaysPrepared || 
@@ -104,14 +108,13 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       (s.preparationMode && s.preparationMode !== 0) || 
       s.isKnown ||              
       s.overrideName ||         
-      s.isCustom ||
-      // [비상] 도메인 주문 이름 강제 확인 (권역 주문이 자주 누락되므로)
-      ["Bless", "Spiritual Weapon", "Cure Wounds", "Lesser Restoration"].includes(def.name);
+      s.isCustom;
 
     if (isPrepared) {
       validSpells.push(s);
     } else {
-      // 준비되지 않음 -> "숨겨진 주문 목록"으로 보냄
+      // 준비되지 않은 주문이라도, 데이터에 있다면 '미준비 목록'에라도 표시
+      // (이름만 저장)
       hiddenSpells.push(name);
     }
   }
@@ -121,7 +124,8 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   // ====================================================
   // 3. 출력 생성
   // ====================================================
-  // 헤더 생성 (메인 스탯 추적)
+  
+  // 메인 스탯 찾기 (헤더용)
   let mainAbility = "wis"; 
   if (Array.isArray(classes)) {
       for (const cls of classes) {
@@ -186,11 +190,11 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       printGroup(groups.other, "기타/치유/버프");
   }
 
-  // [2] 숨겨진/미준비 주문 목록 (여기에 Bless가 있는지 확인하세요!)
+  // [2] 숨겨진/미준비 주문 목록 (권역 주문이 여기 들어있을 수도 있음)
   if (hiddenSpells.length > 0) {
       hiddenSpells.sort((a, b) => a.localeCompare(b));
       lines.push("----------------");
-      lines.push("[미준비/기타 주문 (데이터 존재함)]");
+      lines.push("[준비되지 않음 / 기타 (데이터 존재)]");
       lines.push(hiddenSpells.join(", "));
       lines.push("");
   }
