@@ -21,11 +21,11 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   const lines: string[] = [];
   
   // ====================================================
-  // 1. 주문 데이터 전수 조사 (Scavenger Mode)
+  // 1. 주문 데이터 전수 조사 (모든 구멍 다 뒤지기)
   // ====================================================
   const allSpells: any[] = [];
   
-  // (1) 기본 위치: classSpells (일반적으로 준비한 주문)
+  // (1) 기본 위치: classSpells (준비된 주문)
   const rawClassSpells = ddb?.classSpells ?? ddb?.character?.classSpells;
   if (Array.isArray(rawClassSpells)) {
      for (const group of rawClassSpells) {
@@ -33,7 +33,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
      }
   }
 
-  // (2) 기타 위치: spells object (종족, 피트, 아이템 등)
+  // (2) 기타 위치: spells object (종족, 피트, 아이템)
   const spellsObj = ddb?.spells ?? ddb?.character?.spells;
   if (spellsObj && typeof spellsObj === 'object') {
       for (const key of Object.keys(spellsObj)) {
@@ -44,14 +44,15 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       }
   }
 
-  // (3) 🔥 핵심: 서브클래스 피쳐 내부에 숨은 주문 찾기 (권역 주문은 여기 숨어있음!)
+  // (3) 🔥 핵심: 서브클래스 피쳐 내부에 숨은 주문 강제 추출 (여기에 Bless가 숨어있음!)
+  // 기존 코드에 이 부분이 없어서 권역 주문을 못 찾았던 것입니다.
   const classes = ddb?.classes ?? ddb?.character?.classes;
   if (Array.isArray(classes)) {
       for (const cls of classes) {
-          // A. 클래스 내부에 classSpells가 박혀있는 경우
+          // A. 클래스 객체 내부에 classSpells가 직접 박혀있는 경우
           if (Array.isArray(cls.classSpells)) allSpells.push(...cls.classSpells);
 
-          // B. 서브클래스 정의(subclassDefinition) 뒤지기
+          // B. 서브클래스 및 클래스 기능(Feature) 전수 조사
           const feats = [
               ...(cls.definition?.classFeatures ?? []),      // 기본 클래스 피쳐
               ...(cls.subclassDefinition?.classFeatures ?? []), // 서브클래스 피쳐 (권역 주문)
@@ -79,16 +80,17 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   const seenNames = new Set<string>(); // 이름 기준 중복 방지
 
   for (const s of allSpells) {
-    const def = s?.definition ?? s; // 구조가 다를 수 있음
+    const def = s?.definition ?? s; // 구조가 다를 수 있음 (피쳐에서 가져온 건 구조가 다름)
     if (!def || !def.name) continue;
 
     const name = String(s.overrideName || def.name).trim();
+    
+    // 중복 제거 (이미 등록된 주문이면 스킵)
     if (seenNames.has(name)) continue;
     seenNames.add(name);
 
     const lvl = def.level ?? 0;
 
-    // 🔥 [판정 로직]
     // 1. 소마법(0레벨)은 무조건 통과
     if (lvl === 0) {
       validSpells.push(s);
@@ -96,7 +98,6 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
     }
     
     // 2. 준비된 주문인지 확인
-    // 권역 주문은 보통 alwaysPrepared: true 속성을 가집니다.
     const isPrepared = 
       s.prepared || 
       s.alwaysPrepared || 
@@ -113,8 +114,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
     if (isPrepared) {
       validSpells.push(s);
     } else {
-      // 준비되지 않은 주문이라도, 데이터에 있다면 '미준비 목록'에라도 표시
-      // (이름만 저장)
+      // 준비되지 않은 주문이라도 '미준비 목록'에라도 표시 (누락 방지)
       hiddenSpells.push(name);
     }
   }
