@@ -36,7 +36,7 @@ const BLOCK_KEYWORDS = [
   "Form of Dread", "Wild Shape", "Starry Form", "Breath Weapon"
 ];
 
-// 🔧 [안전장치 1] 능력치 수정치 구하기 (0이면 원본 데이터 뒤져서라도 찾아냄)
+// 🔧 [안전장치 1] 능력치 수정치 구하기
 function getSafeStatMod(ddb: any, basic: NormalizedBasic, statName: 'str' | 'dex'): number {
   if (basic.abilityMods[statName] !== 0) return basic.abilityMods[statName];
   
@@ -52,7 +52,6 @@ function getSafeStatMod(ddb: any, basic: NormalizedBasic, statName: 'str' | 'dex
 function getSafeProficiency(ddb: any, basic: NormalizedBasic): number {
   if (basic.proficiencyBonus > 0) return basic.proficiencyBonus;
   
-  // 레벨 기반 계산
   const classes = ddb?.character?.classes ?? ddb?.classes ?? [];
   let level = 0;
   for (const c of classes) level += (c.level ?? 0);
@@ -94,21 +93,17 @@ export function extractAttacks(ddb: any, basic: NormalizedBasic): AttackItem[] {
       const dmgObj = def.damage;
       if (!dmgObj || (!dmgObj.diceString && !dmgObj.fixedValue)) continue;
 
-      // --- 데이터 추출 ---
       const props = def.properties ?? [];
       const isFinesse = Array.isArray(props) && props.some((p: any) => p.name === "Finesse");
       const isRanged = def.attackType === 2 || (def.range && def.range > 5);
       const isThrown = Array.isArray(props) && props.some((p: any) => p.name === "Thrown");
       
-      // 능력치 선택
       let mod = strMod;
       if (isRanged && !isThrown) mod = dexMod;
       else if (isFinesse) mod = Math.max(strMod, dexMod);
       
-      // ✅ [핵심] 숙련 여부: 명시적으로 false가 아니면 무조건 true로 간주 (사용자 요청 반영)
       const isProf = item.isProficient !== false;
       
-      // 마법 보너스
       let magicBonus = 0;
       if (def.grantedModifiers) {
           for (const m of def.grantedModifiers) {
@@ -116,11 +111,12 @@ export function extractAttacks(ddb: any, basic: NormalizedBasic): AttackItem[] {
           }
       }
       if (magicBonus === 0 && def.magic) magicBonus = 1;
+      
+      // 🔥 [추가 안전장치] 마법 보너스가 비상식적으로 크면(10 초과) 데이터 오류로 보고 0 처리
+      if (Math.abs(magicBonus) > 10) magicBonus = 0;
 
-      // 🔥 최종 명중 = 능력치 + 숙련(있으면) + 마법
       const attackBonus = mod + (isProf ? prof : 0) + magicBonus;
 
-      // 데미지 보정 (주사위만 덜렁 있으면 능력치 추가)
       let damage = dmgObj.diceString ?? (dmgObj.fixedValue ? String(dmgObj.fixedValue) : "");
       if (damage.includes("d") && !damage.includes("+") && !damage.includes("-")) {
           const totalDmgMod = mod + magicBonus;
@@ -175,25 +171,30 @@ export function extractAttacks(ddb: any, basic: NormalizedBasic): AttackItem[] {
 
       if (!isAttackFlag && !hasDamage && !hasToHit) continue;
 
-      // --- 명중 보너스 계산 ---
-      let attackBonus = 0;
+      // --- 명중 보너스 계산 (안전장치 적용) ---
+      const bestMod = Math.max(strMod, dexMod);
+      const bonus = act.toHitBonus ?? 0;
+      // 우리가 직접 계산한 값 (가장 신뢰할 수 있는 기본값)
+      const calculatedBonus = bestMod + prof + bonus;
+      
+      let finalAttackBonus = calculatedBonus;
+
       if (act.toHit != null) {
-          attackBonus = act.toHit; // 이미 계산된 값이 있으면 사용
-      } else {
-          // 없으면 직접 계산 (능력치 + 숙련)
-          // Actions 탭에 있는건 보통 숙련된 공격임
-          const bestMod = Math.max(strMod, dexMod);
-          const bonus = act.toHitBonus ?? 0;
-          attackBonus = bestMod + prof + bonus;
+          // DDB가 제공한 값(act.toHit)이 있고, 그게 상식적인 범위라면 사용
+          // 단, 계산된 값과 차이가 10 이상 나면 DDB 데이터 오류로 간주하고 계산된 값 사용
+          // (+28 같은 비정상 수치 방지)
+          if (Math.abs(act.toHit - calculatedBonus) > 10) {
+              finalAttackBonus = calculatedBonus;
+          } else {
+              finalAttackBonus = act.toHit;
+          }
       }
 
       // --- 데미지 계산 ---
       let damage = "";
       if (dmgObj) {
         damage = dmgObj.diceString ?? (dmgObj.fixedValue ? String(dmgObj.fixedValue) : "");
-        // 데미지 보정 (주사위만 덜렁 있으면 능력치 추가)
         if (damage.includes("d") && !damage.includes("+") && !damage.includes("-")) {
-             const bestMod = Math.max(strMod, dexMod);
              if (bestMod !== 0) damage += (bestMod > 0 ? `+${bestMod}` : `${bestMod}`);
         }
       }
@@ -216,7 +217,7 @@ export function extractAttacks(ddb: any, basic: NormalizedBasic): AttackItem[] {
       found.push({
         name,
         range,
-        attackBonus: Number(attackBonus),
+        attackBonus: Number(finalAttackBonus),
         damage,
         damageType,
         isMagic: act.isMagic ?? false,
