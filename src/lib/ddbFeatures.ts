@@ -12,6 +12,8 @@ const IGNORED_NAMES = new Set([
   "Tortle Protector", // 종족 특성 중 중복되는 것들
   "Primal Knowledge",
   "Optional Class Features",
+  "Hit Points",
+  "Proficiencies",
 ]);
 
 function pickName(x: any): string {
@@ -29,27 +31,26 @@ function uniq(list: string[]): string[] {
   return Array.from(new Set(list.map((s) => s.trim()).filter(Boolean)));
 }
 
+// ... (Maneuver 관련 함수들은 기존과 동일하므로 생략하거나 그대로 둡니다) ...
+// (지면 관계상 아래 deepCollectManeuverNames, normalizeManeuverName은 
+//  기존 코드 그대로 유지한다고 가정하고 extractFeatureLists 부분만 집중적으로 수정합니다.)
+
 function normalizeManeuverName(name: string): string {
   let n = name.trim();
-
-  // "Maneuvers: Precision Attack" → "Precision Attack"
   n = n.replace(/^Maneuvers:\s*/i, "").trim();
-
-  // 흔히 섞이는 상위 피쳐/잡음 제거
   const ban = new Set([
-    "Combat Superiority",
-    "Maneuvers",
-    "Superiority Dice",
-    "Combat Superiority (Fighter)",
+    "Combat Superiority", "Maneuvers", "Superiority Dice", "Combat Superiority (Fighter)",
   ]);
   if (ban.has(n)) return "";
-
   if (n.length < 3) return "";
   return n;
 }
 
 function deepCollectManeuverNames(root: any): string[] {
-  const out = new Set<string>();
+  // ... (기존 코드와 동일) ...
+  // 파일 내용을 줄이기 위해 여기서는 생략하지만, 원본 코드를 그대로 쓰시면 됩니다.
+  // 아래에 extractFeatureLists 로직 안에서 호출됩니다.
+    const out = new Set<string>();
   const seen = new Set<any>();
 
   const isNoise = (name: string) => {
@@ -64,7 +65,7 @@ function deepCollectManeuverNames(root: any): string[] {
 
   const normalize = (name: string) => {
     let n = String(name ?? "").trim();
-    n = n.replace(/^Maneuvers:\s*/i, "").trim(); // "Maneuvers: X" → "X"
+    n = n.replace(/^Maneuvers:\s*/i, "").trim(); 
     if (!n) return "";
     if (isNoise(n)) return "";
     if (n.length < 3) return "";
@@ -127,7 +128,6 @@ function deepCollectManeuverNames(root: any): string[] {
   return Array.from(out).sort((a, b) => a.localeCompare(b));
 }
 
-
 export type FeatureLists = {
   background?: string;
   classes: string[];
@@ -151,29 +151,42 @@ export function extractFeatureLists(ddb: any): FeatureLists {
       c?.class?.definition?.name ??
       c?.class?.name ??
       c?.name;
-    const lvl = Number(c?.level ?? 0);
+    const level = Number(c?.level ?? 0); // ✅ 현재 클래스의 레벨 확인
     const s = String(cn ?? "").trim();
     if (!s) continue;
-    out.classes.push(lvl > 0 ? `${s} ${lvl}` : s);
+    
+    // 클래스 이름 (ex: Fighter 5)
+    out.classes.push(level > 0 ? `${s} ${level}` : s);
 
-    // Class features
-    const cfPools = [
-      c?.classFeatures,
-      // c?.features, // 중복 유발하여 제거
-      c?.definition?.classFeatures,
-    ];
-    for (const p of cfPools) {
-      if (Array.isArray(p)) {
-        for (const f of p) {
-          const fn = pickName(f);
-          if (fn) out.classFeatures.push(fn);
-        }
-      }
+    // ============================================================
+    // 🔥 [수정된 핵심 로직] 피쳐 가져오기 + 레벨 체크
+    // ============================================================
+    
+    // 1. 가져올 후보군 (Pool) 구성
+    // - classFeatures: 캐릭터에게 할당된 인스턴스 피쳐 (보통 선택지가 있는 것들)
+    // - definition.classFeatures: 해당 클래스의 전체 피쳐 목록
+    // - subclassDefinition.classFeatures: 서브클래스의 전체 피쳐 목록 (이게 없으면 서브클래스 피쳐가 누락됨)
+    const rawFeats: any[] = [];
+
+    if (Array.isArray(c?.classFeatures)) rawFeats.push(...c.classFeatures);
+    if (Array.isArray(c?.definition?.classFeatures)) rawFeats.push(...c.definition.classFeatures);
+    if (Array.isArray(c?.subclassDefinition?.classFeatures)) rawFeats.push(...c.subclassDefinition.classFeatures);
+
+    for (const f of rawFeats) {
+      // definition이 있으면 꺼내 쓰고, 없으면 객체 자체를 씀
+      const def = f?.definition ?? f;
+      
+      // ✅ [필수] 레벨 체크!
+      // requiredLevel이 존재하고, 현재 클래스 레벨보다 높으면 건너뜀
+      const reqLvl = Number(def?.requiredLevel);
+      if (reqLvl && reqLvl > level) continue;
+
+      const fn = pickName(f);
+      if (fn) out.classFeatures.push(fn);
     }
   }
 
-  // ✅ [수정] Feats: 불필요한 곳(featChoices, options)을 뒤지지 않고 '진짜 피트'만 봅니다.
-  // ddb.feats가 가장 정확하며, Variant Human 보너스 피트도 여기에 들어있습니다.
+  // Feats
   const featsRaw = ddb?.feats;
   if (Array.isArray(featsRaw)) {
     for (const f of featsRaw) {
@@ -195,9 +208,8 @@ export function extractFeatureLists(ddb: any): FeatureLists {
   out.classes = uniq(out.classes);
   out.feats = uniq(out.feats);
   
-  // 중복 제거: 만약 피트 이름이 클래스 피쳐에도 있다면(드물지만), 피트 쪽을 우선시하고 싶다면 여기서 필터링 가능
-  // 지금은 그냥 둡니다.
-  out.classFeatures = uniq(out.classFeatures);
+  // 중복 제거 및 정렬
+  out.classFeatures = uniq(out.classFeatures).sort((a, b) => a.localeCompare(b));
 
   return out;
 }
@@ -227,7 +239,7 @@ export function buildFeatureListKo(lists: any): string {
 
   pushSection("배경", lists.background);
   pushSection("클래스", lists.classes);
-  pushSection("피트", lists.feats); // 이제 깔끔하게 나올 겁니다
+  pushSection("피트", lists.feats); 
   pushSection("전투 기교", lists.maneuvers);
   pushSection("클래스 피쳐", lists.classFeatures);
 
