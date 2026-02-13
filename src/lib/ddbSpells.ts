@@ -20,11 +20,9 @@ function getSpellAbility(classDef: any): string {
 export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   const lines: string[] = [];
   
-  // 1. 모든 주문 소스 긁어오기 (구조가 다를 수 있으므로 안전하게 병합)
+  // 1. 모든 주문 소스 긁어오기
   const rawClassSpells = ddb?.classSpells ?? ddb?.character?.classSpells ?? [];
   const rawClasses = ddb?.classes ?? ddb?.character?.classes ?? [];
-  
-  // 혹시 모를 플랫 리스트 (일부 데이터 포맷 대응)
   const flatClassSpells = ddb?.spells?.class ?? ddb?.character?.spells?.class ?? [];
 
   // 2. 추가 소스 (종족, 피트, 아이템)
@@ -40,40 +38,48 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   const processList = (spells: any[], title: string, abilityKey: string, showHeader: boolean) => {
     if (!Array.isArray(spells) || spells.length === 0) return;
 
-    // 🔥 [핵심 수정] 권역 주문(Bless 등) 누락 방지를 위한 필터 대폭 완화
-    const validSpells = spells.filter(s => {
+    // 분류용 바구니
+    const validSpells: any[] = [];
+    const unpreparedNames: string[] = []; // 준비되지 않았지만 레벨이 있는 주문들
+
+    for (const s of spells) {
       const def = s.definition;
-      if (!def) return false;
+      if (!def) continue;
       const lvl = def.level ?? 0;
+      const name = s.overrideName || def.name || "Unknown";
 
-      // 1. 소마법은 무조건 통과
-      if (lvl === 0) return true;
+      // 1. 소마법은 무조건 통과 (준비 개념 없음)
+      if (lvl === 0) {
+        validSpells.push(s);
+        continue;
+      }
       
-      // 2. 기본 준비 상태 확인
-      if (s.prepared || s.alwaysPrepared || s.countsAsKnownSpell) return true;
-      if (def.alwaysPrepared) return true;
-      
-      // 3. 특수 상태 (활성화, 부여됨, 제한적 사용)
-      if (s.active || s.granted || s.limitedUse) return true;
+      // 2. 준비된 주문인지 확인
+      const isPrepared = 
+        s.prepared || 
+        s.alwaysPrepared || 
+        s.countsAsKnownSpell || 
+        def.alwaysPrepared || 
+        s.active || 
+        s.granted || 
+        s.limitedUse || 
+        (s.preparationMode && s.preparationMode !== 0) ||
+        s.isKnown || 
+        s.overrideName || 
+        s.isCustom;
 
-      // 4. [신규] 준비 모드(preparationMode) 확인
-      // 0: Prepared (준비 필요), 4: Domain(항상 준비) 등
-      // 모드가 0이 아니라면 뭔가 특수한(자동 준비된) 주문일 가능성이 높음
-      if (s.preparationMode && s.preparationMode !== 0) return true;
+      if (isPrepared) {
+        validSpells.push(s);
+      } else {
+        // 3. 준비되지 않음 -> 미준비 목록에 이름만 저장 (중복 방지)
+        // (클레릭의 경우 전체 주문 목록이 여기에 해당될 수 있음)
+        if (!unpreparedNames.includes(name)) {
+          unpreparedNames.push(name);
+        }
+      }
+    }
 
-      // 5. [신규] 아는 주문(isKnown) 플래그 확인 (바드/소서러 및 일부 클레릭 데이터)
-      if (s.isKnown) return true;
-
-      // 6. [비상] "Domain" 태그가 있거나 소스 출처가 서브클래스인 경우 (Flags 체크 없이 통과)
-      // (Bless 등이 prepared=false, alwaysPrepared=false로 오는 버그 대응)
-      // 데이터상 구분이 어려우므로, 만약 클래스 리스트에 '강제로' 끼워져 있다면 일단 표시
-      // 단, 전체 리스트를 다 가져오는 참사를 막기 위해 'overrideName'이 있거나 커스텀이면 통과
-      if (s.overrideName || s.isCustom) return true;
-
-      return false;
-    });
-
-    if (validSpells.length === 0) return;
+    if (validSpells.length === 0 && unpreparedNames.length === 0) return;
 
     // 헤더 출력
     if (showHeader) {
@@ -91,13 +97,11 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
     };
     const dmgList: string[] = [];
 
+    // 유효한(준비된) 주문 처리
     for (const s of validSpells) {
         const def = s.definition;
-        
-        // 이름 우선순위: 오버라이드(유저 지정 이름) > 원본 이름
         const name = s.overrideName || def.name || "Unknown";
 
-        // 그룹 분류
         if (def.requiresAttackRoll) groups.attack.push(name);
         else if (def.requiresSavingThrow) groups.save.push(name);
         else groups.other.push(name);
@@ -111,7 +115,6 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
                     const t = m.subType ?? "damage";
                     return `${d} ${t}`;
                 });
-                // 중복 방지를 위해 Set에 넣을 준비
                 dmgList.push(`${name}: ${parts.join(" + ")}`);
             }
         }
@@ -120,24 +123,36 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
     // 출력 헬퍼
     const printGroup = (list: string[], label?: string) => {
         if (list.length === 0) return;
-        // 중복 제거 및 정렬
         const uniq = [...new Set(list)].sort((a, b) => a.localeCompare(b));
         if (label) lines.push(`[${label}]`);
         lines.push(...uniq);
         lines.push("");
     };
 
-    // 통합 리스트 (알파벳순 전체 목록)
+    // 1. 준비된 주문 목록 출력
     const allNames = [...groups.attack, ...groups.save, ...groups.other];
-    // 이름만 먼저 쫙 뽑아줍니다 (사용자 요청 스타일)
-    const sortedAll = [...new Set(allNames)].sort((a, b) => a.localeCompare(b));
-    lines.push(...sortedAll);
-    lines.push("");
+    if (allNames.length > 0) {
+        const sortedAll = [...new Set(allNames)].sort((a, b) => a.localeCompare(b));
+        lines.push(...sortedAll);
+        lines.push("");
+        
+        printGroup(groups.attack, "명중 주문");
+        printGroup(groups.save, "내성굴림 주문");
+        printGroup(groups.other, "기타/치유/버프");
+    }
 
-    // 카테고리별 상세
-    printGroup(groups.attack, "명중 주문");
-    printGroup(groups.save, "내성굴림 주문");
-    printGroup(groups.other, "기타/치유/버프");
+    // 2. 미준비 주문 목록 출력 (폴백)
+    // 권역 주문이 준비 안 된 것으로 인식될 경우 여기서라도 보이게 함
+    if (unpreparedNames.length > 0) {
+        lines.push("----------------");
+        lines.push("[미준비/기타 주문 목록]");
+        lines.push("(D&D Beyond에서 준비되지 않은 것으로 표시된 주문들)");
+        
+        // 너무 많으면 보기 힘들 수 있으므로 쉼표로 구분하여 출력
+        unpreparedNames.sort((a, b) => a.localeCompare(b));
+        lines.push(unpreparedNames.join(", "));
+        lines.push("");
+    }
 
     if (dmgList.length > 0) {
         lines.push("----------------");
@@ -160,7 +175,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
 
   // 4. 기타 주문 처리
   if (otherSources.length > 0) {
-      processList(otherSources, "특수/종족/아이템", "wis", true); // 기본 기반 wis (임시)
+      processList(otherSources, "특수/종족/아이템", "wis", true);
   }
 
   return lines.length > 0 ? lines.join("\n").trim() : "주문 없음";
