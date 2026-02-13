@@ -26,6 +26,9 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   const rawClassSpells = ddb?.classSpells ?? ddb?.character?.classSpells ?? [];
   const rawClasses = ddb?.classes ?? ddb?.character?.classes ?? [];
   
+  // 혹시 모를 누락을 대비해 character.spells.class (플랫 구조)도 확인
+  const flatClassSpells = ddb?.spells?.class ?? ddb?.character?.spells?.class ?? [];
+  
   const spellsRace = ddb?.spells?.race ?? ddb?.character?.spells?.race ?? [];
   const spellsFeat = ddb?.spells?.feat ?? ddb?.character?.spells?.feat ?? [];
   const spellsItem = ddb?.spells?.item ?? ddb?.character?.spells?.item ?? [];
@@ -38,27 +41,38 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   const processSpellList = (spells: any[], title: string, abilityKey: string, showHeader: boolean) => {
     if (!Array.isArray(spells) || spells.length === 0) return;
 
-    // 사용할 수 있는 주문만 필터링
+    // 🔥 [핵심 수정] 준비 여부 판정 로직 대폭 강화
     const validSpells = spells.filter(s => {
       const def = s?.definition;
       if (!def) return false;
       const lvl = def.level ?? 0;
 
-      // 🔥 [핵심 수정] 준비 여부 판정 로직 강화
       // 1. 소마법(0레벨)은 무조건 포함
       if (lvl === 0) return true;
       
       // 2. 명시적으로 준비됨(prepared) or 항상 준비됨(alwaysPrepared)
-      if (s.prepared || s.alwaysPrepared) return true;
+      if (s.prepared === true || s.alwaysPrepared === true) return true;
       
-      // 3. 아는 주문으로 취급(countsAsKnownSpell - 바드/소서러 등)
-      if (s.countsAsKnownSpell) return true;
+      // 3. 정의(definition) 자체에 alwaysPrepared가 박혀있는 경우 (권역 주문 등)
+      if (def.alwaysPrepared === true) return true;
 
-      // 4. 활성화됨(active) or 부여됨(granted) - 아이템/피트 등
-      if (s.active || s.granted) return true;
+      // 4. 아는 주문으로 취급(countsAsKnownSpell - 바드/소서러/워락 등)
+      // 주의: 클레릭 같은 준비 직업은 이게 false일 수 있음
+      if (s.countsAsKnownSpell === true) return true;
 
-      // 5. 제한적 사용(limitedUse)이 있는 경우 (예: 종족 특성으로 1회 사용 등) 보통 사용 가능
+      // 5. 활성화됨(active) or 부여됨(granted) - 아이템/피트/특성
+      if (s.active === true || s.granted === true) return true;
+
+      // 6. [추가] 제한적 사용(limitedUse)이 있으면 보통 특수 능력으로 얻은 주문임
       if (s.limitedUse) return true;
+
+      // 7. [비상] "Domain"이나 "Circle" 주문 등은 출처(sourceId)나 태그로 구분이 어렵지만,
+      //    D&D Beyond 버그로 flags가 모두 false인 경우가 있음.
+      //    만약 '항상 준비'되어야 하는 특수 주문이라면 보통 tooltip이나 activation 정보가 있음.
+      //    여기서는 너무 많이 거르지 않기 위해, 준비된 주문 목록에 '강제로 끼워넣어진' 주문들을 체크.
+      
+      // 8. 사용자가 커스텀으로 추가한 주문 (isCustom)
+      if (s.isCustom) return true;
 
       return false;
     });
@@ -89,8 +103,8 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       const def = s.definition;
       const name = def.name ?? "Unknown";
       
-      // 중복 방지 (같은 이름이 이미 목록에 있으면 스킵하고 싶으면 주석 해제)
-      // if (allSpells.includes(name)) continue;
+      // 중복 방지
+      if (allSpells.includes(name)) continue;
 
       allSpells.push(name);
 
@@ -166,13 +180,11 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   }
 
   // ====================================================
-  // 3. 기타 주문 처리 (종족, 피트, 아이템)
+  // 3. 기타 주문 처리 (종족, 피트, 아이템, 플랫 클래스)
   // ====================================================
-  const extraSpells = [...spellsRace, ...spellsFeat, ...spellsItem, ...spellsBg];
+  // flatClassSpells는 가끔 DDB가 구조를 다르게 줄 때를 대비한 비상용입니다.
+  const extraSpells = [...spellsRace, ...spellsFeat, ...spellsItem, ...spellsBg, ...flatClassSpells];
   if (extraSpells.length > 0) {
-    // 기타 주문은 보통 가장 높은 정신 능력치를 쓰거나, 각자 다르지만
-    // 여기서는 가장 높은 능력치(WIS 등)를 대표로 표시하거나, 헤더를 간소화합니다.
-    // 편의상 WIS나 CHA 중 높은 것을 쓸 수도 있지만, 단순히 목록만 보여줍니다.
     processSpellList(extraSpells, "특수/종족/피트/아이템", "wis", true);
   }
 
@@ -180,7 +192,6 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   // 4. 데미지 정보 푸터
   // ====================================================
   if (damageInfoList.length > 0) {
-    // 중복 제거 및 정렬
     const uniqDmg = Array.from(new Set(damageInfoList)).sort();
     
     lines.push("----------------");
