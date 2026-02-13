@@ -111,10 +111,11 @@ export function extractAttacks(ddb: any, basic: NormalizedBasic): AttackItem[] {
           }
       }
       if (magicBonus === 0 && def.magic) magicBonus = 1;
-      
-      // 🔥 [추가 안전장치] 마법 보너스가 비상식적으로 크면(10 초과) 데이터 오류로 보고 0 처리
+
+      // 🔥 [안전장치] 마법 보너스가 +10을 넘으면 0으로 초기화 (오류 데이터 방지)
       if (Math.abs(magicBonus) > 10) magicBonus = 0;
 
+      // ✅ [강제 계산] DDB가 준 값 무시하고 무조건 직접 계산
       const attackBonus = mod + (isProf ? prof : 0) + magicBonus;
 
       let damage = dmgObj.diceString ?? (dmgObj.fixedValue ? String(dmgObj.fixedValue) : "");
@@ -130,148 +131,4 @@ export function extractAttacks(ddb: any, basic: NormalizedBasic): AttackItem[] {
       let range = "5ft";
       if (def.range) {
          range = `${def.range}ft`;
-         if (def.longRange) range += `/${def.longRange}ft`;
-      }
-
-      found.push({
-        name,
-        range,
-        attackBonus,
-        damage,
-        damageType,
-        isMagic: magicBonus > 0 || def.magic,
-        notes: "인벤토리 장비",
-        source: "inventory"
-      });
-      foundNames.add(name);
-    }
-  }
-
-  // ====================================================
-  // 2. Actions 탭 털기
-  // ====================================================
-  const actionsRoot = ddb?.character?.actions ?? ddb?.actions ?? {};
-  const actionKeys = Object.keys(actionsRoot);
-
-  for (const key of actionKeys) {
-    const acts = actionsRoot[key];
-    if (!Array.isArray(acts)) continue;
-
-    for (const act of acts) {
-      const name = act.name || act.definition?.name;
-      if (!name) continue;
-
-      if (foundNames.has(name)) continue;
-      if (BLOCK_KEYWORDS.some(k => name.includes(k))) continue;
-      
-      const dmgObj = act.damage ?? act.definition?.damage;
-      const hasDamage = !!(dmgObj?.diceString || dmgObj?.fixedValue);
-      const isAttackFlag = act.displayAsAttack === true || act.isAttack === true;
-      const hasToHit = act.toHit != null || act.toHitBonus != null;
-
-      if (!isAttackFlag && !hasDamage && !hasToHit) continue;
-
-      // --- 명중 보너스 계산 (안전장치 적용) ---
-      const bestMod = Math.max(strMod, dexMod);
-      const bonus = act.toHitBonus ?? 0;
-      // 우리가 직접 계산한 값 (가장 신뢰할 수 있는 기본값)
-      const calculatedBonus = bestMod + prof + bonus;
-      
-      let finalAttackBonus = calculatedBonus;
-
-      if (act.toHit != null) {
-          // DDB가 제공한 값(act.toHit)이 있고, 그게 상식적인 범위라면 사용
-          // 단, 계산된 값과 차이가 10 이상 나면 DDB 데이터 오류로 간주하고 계산된 값 사용
-          // (+28 같은 비정상 수치 방지)
-          if (Math.abs(act.toHit - calculatedBonus) > 10) {
-              finalAttackBonus = calculatedBonus;
-          } else {
-              finalAttackBonus = act.toHit;
-          }
-      }
-
-      // --- 데미지 계산 ---
-      let damage = "";
-      if (dmgObj) {
-        damage = dmgObj.diceString ?? (dmgObj.fixedValue ? String(dmgObj.fixedValue) : "");
-        if (damage.includes("d") && !damage.includes("+") && !damage.includes("-")) {
-             if (bestMod !== 0) damage += (bestMod > 0 ? `+${bestMod}` : `${bestMod}`);
-        }
-      }
-
-      const dmgTypeId = act.damageTypeId ?? act.definition?.damageTypeId;
-      const rawType = dmgTypeId ? getDamageTypeFromId(dmgTypeId) : "";
-      const damageType = DAMAGE_TYPE_KO[rawType] ?? rawType;
-      
-      let range = "5ft";
-      const rangeObj = act.range ?? act.definition?.range;
-      if (rangeObj) {
-        if (rangeObj.range) range = `${rangeObj.range}ft`;
-        if (rangeObj.long) range += `/${rangeObj.long}ft`;
-      }
-
-      let snippet = act.snippet ?? act.description ?? act.definition?.description ?? "";
-      snippet = snippet.replace(/<[^>]*>?/gm, "");
-      const notes = snippet.length > 50 ? snippet.slice(0, 50) + "..." : snippet;
-
-      found.push({
-        name,
-        range,
-        attackBonus: Number(finalAttackBonus),
-        damage,
-        damageType,
-        isMagic: act.isMagic ?? false,
-        notes,
-        source: "action"
-      });
-      foundNames.add(name);
-    }
-  }
-
-  // ====================================================
-  // 3. 맨손 공격 비상 추가
-  // ====================================================
-  if (!foundNames.has("Unarmed Strike") && !foundNames.has("맨손 공격")) {
-      const hit = strMod + prof;
-      const dmg = 1 + strMod;
-
-      found.push({
-          name: "Unarmed Strike",
-          range: "5ft",
-          attackBonus: hit,
-          damage: `${dmg}`,
-          damageType: "타격",
-          isMagic: false,
-          notes: "기본 맨손 공격",
-          source: "system"
-      });
-  }
-
-  return found;
-}
-
-export function buildAttackListKo(attacks: AttackItem[], basic: NormalizedBasic): string {
-  const lines: string[] = [];
-  
-  if (attacks.length === 0) return "공격 수단 없음";
-
-  for (const atk of attacks) {
-    const sign = atk.attackBonus >= 0 ? "+" : "";
-    
-    let dmgPart = "";
-    if (atk.damage) {
-      dmgPart = ` / ${atk.damage} ${atk.damageType}`;
-    }
-    
-    const magicMark = atk.isMagic ? "[마법]" : "";
-    let notePart = "";
-    
-    if (atk.notes && atk.notes !== "인벤토리 장비" && atk.notes !== "기본 맨손 공격") {
-        notePart = `\n> ${atk.notes}`;
-    }
-    
-    lines.push(`1d20${sign}${atk.attackBonus} ${atk.name}${magicMark} (${atk.range})${dmgPart}${notePart}`);
-  }
-
-  return lines.join("\n");
-}
+         if (def.longRange) range += `/${def.longRange}
