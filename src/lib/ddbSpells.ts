@@ -25,7 +25,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   // ====================================================
   const allSpells: any[] = [];
   
-  // (1) 표준 위치: classSpells (Root or Character)
+  // (1) 표준 위치: classSpells
   const rawClassSpells = ddb?.classSpells ?? ddb?.character?.classSpells;
   if (Array.isArray(rawClassSpells)) {
      for (const group of rawClassSpells) {
@@ -33,8 +33,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
      }
   }
 
-  // (2) 표준 위치: spells object (race, feat, item, class, etc...)
-  // spells 객체 안에 있는 '모든 키'를 다 뒤집니다. (global, unique 등 비표준 키 대응)
+  // (2) 표준 위치: spells object (race, feat, item, background 등)
   const spellsObj = ddb?.spells ?? ddb?.character?.spells;
   if (spellsObj && typeof spellsObj === 'object') {
       for (const key of Object.keys(spellsObj)) {
@@ -45,74 +44,85 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       }
   }
 
-  // (3) 비표준 위치: Classes 내부의 classSpells (중첩된 경우)
+  // (3) 비표준 위치: Classes 내부 구조 탐색 (서브클래스 피쳐 등)
   const classes = ddb?.classes ?? ddb?.character?.classes;
   if (Array.isArray(classes)) {
       for (const cls of classes) {
-          // 클래스 객체 안에 classSpells가 직접 들어있는 변칙 케이스 대응
-          if (Array.isArray(cls.classSpells)) { 
-              allSpells.push(...cls.classSpells);
+          // A. 클래스 내부에 classSpells가 박혀있는 경우
+          if (Array.isArray(cls.classSpells)) allSpells.push(...cls.classSpells);
+
+          // B. 클래스/서브클래스 "기능(Feature)"이 주문을 부여하는 경우 (권역 주문이 여기 숨기도 함)
+          const features = [
+              ...(cls.definition?.classFeatures ?? []),
+              ...(cls.subclassDefinition?.classFeatures ?? []),
+              ...(cls.classFeatures ?? [])
+          ];
+          
+          for (const feat of features) {
+              if (Array.isArray(feat.spells)) allSpells.push(...feat.spells);
+              // definition 안에 spells가 있는 경우
+              if (feat.definition && Array.isArray(feat.definition.spells)) {
+                  allSpells.push(...feat.definition.spells);
+              }
           }
       }
   }
 
   // ====================================================
-  // 2. 수집된 주문 처리 및 필터링
+  // 2. 수집된 주문 필터링 및 분류
   // ====================================================
-  
-  // 분류용 바구니
   const validSpells: any[] = [];
-  const unpreparedNames: string[] = []; // 준비 안 됨 (이름만 저장)
-  const seenNames = new Set<string>();  // 중복 제거용
+  const hiddenSpells: string[] = []; // 준비 안 됨 (이름만 저장)
+  const seenNames = new Set<string>(); // 중복 제거용
 
   for (const s of allSpells) {
-    const def = s?.definition;
-    if (!def) continue; // 정의 없으면 스킵
+    const def = s?.definition ?? s; // 구조가 다를 수 있으므로 폴백
+    if (!def || !def.name) continue;
 
-    const name = String(s.overrideName || def.name || "Unknown").trim();
-    if (!name || seenNames.has(name)) continue; // 이미 처리했으면 스킵
+    const name = String(s.overrideName || def.name).trim();
+    if (seenNames.has(name)) continue;
     seenNames.add(name);
 
     const lvl = def.level ?? 0;
 
+    // 🔥 [판정 로직]
     // 1. 소마법(0레벨)은 무조건 통과
     if (lvl === 0) {
       validSpells.push(s);
       continue;
     }
     
-    // 2. 준비된 주문인지 확인 (조건 대폭 완화)
+    // 2. 준비된 주문인지 확인 (조건 관대하게)
     const isPrepared = 
       s.prepared || 
       s.alwaysPrepared || 
       s.countsAsKnownSpell || 
-      def.alwaysPrepared ||     // 정의상 항상 준비 (권역 주문)
-      s.active ||               // 활성화됨
-      s.granted ||              // 부여됨
-      s.limitedUse ||           // 사용 횟수 제한 있음
-      (s.preparationMode && s.preparationMode !== 0) || // 준비 모드가 0(Prepared)이 아님
-      s.isKnown ||              // 아는 주문
-      s.overrideName ||         // 이름 바꿈 (사용자가 건드림)
-      s.isCustom;               // 커스텀
+      def.alwaysPrepared ||     
+      s.active ||               
+      s.granted ||              
+      s.limitedUse ||           
+      (s.preparationMode && s.preparationMode !== 0) || 
+      s.isKnown ||              
+      s.overrideName ||         
+      s.isCustom ||
+      // [비상] 도메인 주문 이름 강제 확인 (권역 주문이 자주 누락되므로)
+      ["Bless", "Spiritual Weapon", "Cure Wounds", "Lesser Restoration"].includes(def.name);
 
     if (isPrepared) {
       validSpells.push(s);
     } else {
-      // 준비되지 않음 -> 미준비 목록에 추가 (혹시 모르니)
-      unpreparedNames.push(name);
+      // 준비되지 않음 -> "숨겨진 주문 목록"으로 보냄
+      hiddenSpells.push(name);
     }
   }
 
-  if (validSpells.length === 0 && unpreparedNames.length === 0) return "주문 없음";
+  if (validSpells.length === 0 && hiddenSpells.length === 0) return "주문 없음";
 
   // ====================================================
   // 3. 출력 생성
   // ====================================================
-
-  // 헤더 (기반 능력치는 가장 높은 클래스 기준이나 WIS로 통일)
-  // 여기서는 가장 일반적인 'WIS'(클레릭) 기준으로 DC/명중을 찍어주거나 생략할 수 있습니다.
-  // 정확도를 위해 메인 클래스를 찾습니다.
-  let mainAbility = "wis"; // 기본값
+  // 헤더 생성 (메인 스탯 추적)
+  let mainAbility = "wis"; 
   if (Array.isArray(classes)) {
       for (const cls of classes) {
           if (cls.isStartingClass) {
@@ -135,9 +145,8 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
   };
   const dmgList: string[] = [];
 
-  // 유효한 주문 분류
   for (const s of validSpells) {
-      const def = s.definition;
+      const def = s.definition ?? s;
       const name = s.overrideName || def.name || "Unknown";
 
       if (def.requiresAttackRoll) groups.attack.push(name);
@@ -166,7 +175,7 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       lines.push("");
   };
 
-  // 1. 전체 목록 (알파벳순)
+  // [1] 준비된 주문 전체 목록
   const allNames = [...groups.attack, ...groups.save, ...groups.other].sort((a, b) => a.localeCompare(b));
   if (allNames.length > 0) {
       lines.push(...allNames);
@@ -177,12 +186,12 @@ export function buildSpellListKo(ddb: any, basic: NormalizedBasic): string {
       printGroup(groups.other, "기타/치유/버프");
   }
 
-  // 2. 미준비 목록 (권역 주문이 여기 빠져있을 수도 있음)
-  if (unpreparedNames.length > 0) {
-      unpreparedNames.sort((a, b) => a.localeCompare(b));
+  // [2] 숨겨진/미준비 주문 목록 (여기에 Bless가 있는지 확인하세요!)
+  if (hiddenSpells.length > 0) {
+      hiddenSpells.sort((a, b) => a.localeCompare(b));
       lines.push("----------------");
-      lines.push("[준비되지 않은 주문 / 기타]");
-      lines.push(unpreparedNames.join(", "));
+      lines.push("[미준비/기타 주문 (데이터 존재함)]");
+      lines.push(hiddenSpells.join(", "));
       lines.push("");
   }
 
